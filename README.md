@@ -33,31 +33,31 @@ C++와 Windows IOCP(Input/Output Completion Port) API를 활용하여 제작 중
 ---
 
 ## 🗺 앞으로 구현할 것 (Roadmap)
-Phase 1: 기반 완성
-[ ] Worker Thread Pool: CPU 코어 수에 최적화된 스레드 생성 및 관리 시스템.
 
-[ ] Packet Marshaling: 바이트 스트림을 패킷 단위로 조립하고 분해하는 로직.
+### Phase 1: 기반 완성
+- [ ] Worker Thread Pool: CPU 코어 수에 최적화된 스레드 생성 및 관리 시스템.
+- [ ] Packet Marshaling: 바이트 스트림을 패킷 단위로 조립하고 분해하는 로직.
 
-Phase 2: 송수신 심화
-[ ] Send Buffer: 효율적인 송신을 위한 Gather Send 및 송신 큐 관리.
+### Phase 2: 송수신 심화
+- [ ] Send Buffer: 효율적인 송신을 위한 Gather Send 및 송신 큐 관리.
+- [ ] Protobuf/FlatBuffers: 직렬화 라이브러리 연동을 통한 패킷 자동화.
 
-[ ] Protobuf/FlatBuffers: 직렬화 라이브러리 연동을 통한 패킷 자동화.
+### Phase 3: 게임 로직 & 동기화
+- [ ] Job Queue: 멀티스레드 환경에서 데이터 경합을 최소화하는 일감 처리 시스템.
+- [ ] Deadlock Detector: 자원 경쟁 상태 모니터링 툴.
 
-Phase 3: 게임 로직 & 동기화
-[ ] Job Queue: 멀티스레드 환경에서 데이터 경합을 최소화하는 일감 처리 시스템.
+### Phase 4: 성능 모니터링
+- [ ] Logging System: 멀티스레드 안전한 비동기 로그 시스템.
+- [ ] Monitoring UI: 접속자 수 및 서버 상태 실시간 대시보드.
 
-[ ] Deadlock Detector: 자원 경쟁 상태 모니터링 툴.
-
-Phase 4: 성능 모니터링
-[ ] Logging System: 멀티스레드 안전한 비동기 로그 시스템.
-
-[ ] Monitoring UI: 접속자 수 및 서버 상태 실시간 대시보드.
 ---
+
 ## 💻 실행 방법 (Getting Started)
-환경: Windows 10/11, Visual Studio 2022 이상.
 
-빌드: x64 플랫폼 권장.
-
-종속성: ws2_32.lib, mswsock.lib 링크 필요.
-
-프로젝트 설정의 추가 포함 디렉터리에 $(ProjectDir)Network/Include 및 $(ProjectDir)Core 등록 확인.
+- **환경**: Windows 10/11, Visual Studio 2022 이상  
+- **빌드**: x64 플랫폼 권장  
+- **종속성**: `ws2_32.lib`, `mswsock.lib` 링크 필요  
+- **프로젝트 설정**: 추가 포함 디렉터리에  
+  - `$(ProjectDir)Network/Include`  
+  - `$(ProjectDir)Core`  
+  등록 확인
