@@ -1,10 +1,10 @@
-# 🚀 IOCP 기반 고성능 게임 서버 엔진
+# IOCP 기반 고성능 게임 서버 엔진
 
 C++와 Windows IOCP(Input/Output Completion Port) API를 활용하여 제작 중인 비동기 네트워크 서버 엔진입니다. 고성능, 고가용성을 목표로 세션 풀링과 효율적인 메모리 관리를 지원합니다.
 
 ---
 
-## 🛠 현재 구현된 기능
+## 현재 구현된 기능
 
 ### 1. Network Core
 - **IocpCore**: IOCP 커널 객체 관리 및 Worker Thread를 위한 이벤트 디스패처(`Dispatch`) 구현.
@@ -19,7 +19,7 @@ C++와 Windows IOCP(Input/Output Completion Port) API를 활용하여 제작 중
 
 ---
 
-## 📂 폴더 구조 (Directory Structure)
+## 폴더 구조 (Directory Structure)
 
 ```text
 /Server
@@ -32,7 +32,7 @@ C++와 Windows IOCP(Input/Output Completion Port) API를 활용하여 제작 중
 ```
 ---
 
-## 🗺 앞으로 구현할 것 (Roadmap)
+## 앞으로 구현할 것 (Roadmap)
 
 ### Phase 1: 기반 완성
 - [ ] Worker Thread Pool: CPU 코어 수에 최적화된 스레드 생성 및 관리 시스템.
@@ -52,7 +52,7 @@ C++와 Windows IOCP(Input/Output Completion Port) API를 활용하여 제작 중
 
 ---
 
-## 💻 실행 방법 (Getting Started)
+## 실행 방법 (Getting Started)
 
 - **환경**: Windows 10/11, Visual Studio 2022 이상  
 - **빌드**: x64 플랫폼 권장  
