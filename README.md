@@ -29,10 +29,10 @@ C++와 Windows IOCP(Input/Output Completion Port) API를 활용하여 제작 중
   │    └── /Source    # 구현 파일 (.cpp)
   ├── /Client         # 테스트용 클라이언트
   └── Main.cpp        # 서버 엔트리 포인트
-
+```
 ---
 
-🗺 앞으로 구현할 것 (Roadmap)
+## 🗺 앞으로 구현할 것 (Roadmap)
 Phase 1: 기반 완성
 [ ] Worker Thread Pool: CPU 코어 수에 최적화된 스레드 생성 및 관리 시스템.
 
@@ -53,7 +53,7 @@ Phase 4: 성능 모니터링
 
 [ ] Monitoring UI: 접속자 수 및 서버 상태 실시간 대시보드.
 ---
-💻 실행 방법 (Getting Started)
+## 💻 실행 방법 (Getting Started)
 환경: Windows 10/11, Visual Studio 2022 이상.
 
 빌드: x64 플랫폼 권장.
