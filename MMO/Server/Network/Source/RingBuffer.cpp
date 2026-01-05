@@ -14,6 +14,13 @@ RingBuffer::~RingBuffer() {
 }
 
 
+void RingBuffer::MoveWritePos(int len)
+{
+	// 쓴 양(len)만큼 writePos를 이동시키되, 버퍼 크기를 넘어가면 앞으로 순환(%)시킴
+	// (pos + len) % capacity
+	m_writePos = (m_writePos + len) % m_capacity;
+}
+
 // 현재 버퍼에 쌓여있는 데이터 양 계산
 int RingBuffer::GetUseSize() {
 	if (m_writePos >= m_readPos) {
@@ -60,6 +67,16 @@ int RingBuffer::GetContinuousFreeSize()
 	{
 		return m_readPos - m_writePos - 1; 
 	}
+}
+
+int RingBuffer::GetContinuousUsedSize()
+{
+	// readPos가 writePos보다 뒤에 있다면, 배열 끝까지만 연속된 데이터임
+	if (m_readPos > m_writePos) 
+		return m_capacity - m_readPos;
+
+	// readPos가 앞에 있다면 writePos 까지만 연속된 데이터
+	return m_writePos - m_readPos;
 }
 
 bool RingBuffer::Write(const char* data, int len)

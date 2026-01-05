@@ -19,6 +19,7 @@ public:
 
 	// 사용한 만큼 위치 이동
 	void Comsume(int len);
+	void MoveWritePos(int len); 
 
 	int GetUseSize();		// 현재 쌓인 데이터 양
 	int GetFreeSize();	// 남은 공간
@@ -26,6 +27,7 @@ public:
 	void Clear();
 	char* GetWriteBufferPtr();
 	int GetContinuousFreeSize();
+	int GetContinuousUsedSize(); 
 
 private:
 	std::vector<char> m_buffer;

@@ -3,22 +3,33 @@
 #include <queue>
 #include <mutex>
 
+#include "Session.h"
+
 class Session;
 
 class SessionManager
 {
 public:
-	// 서버 시작 시 최대 세션 개수만큼 미리 생성
-	SessionManager(int maxSessionCount);
-	~SessionManager();
+	// 서버 시작 시 한번만 호출하여 세션을 미리 생성 (생성자 대신) 
+	void Init(int maxSessionCount);
+
+	static SessionManager* Get()
+	{
+		static SessionManager instance;
+		return &instance; 
+	}
+	
 
 	// 비어있는 세션을 하나 빌려줌 (Accept 시 호출)
-	Session* Pop();
+	Session* Acquire();
 
 	// 사용이 끝난 세션 다시 반남 (Disconnect 시 호출)
-	void Push(Session* session);
+	void Release(Session* session);
+
 
 private:
+	SessionManager() {}; 
+	~SessionManager();
 	std::vector<Session*> m_sessions;		// 모든 세션 객체 보관용
 	std::queue<Session*> m_freeSessions;	// 현재 빌려줄 수 있는 세션들
 	std::mutex m_mutex;						// 여러 스레드에서 접근하므로 동기화 필요

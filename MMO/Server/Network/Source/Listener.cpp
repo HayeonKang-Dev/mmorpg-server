@@ -1,5 +1,6 @@
 #include "Listener.h"
 
+#include "IocpCore.h"
 #include "Session.h"
 
 Listener::Listener() : m_listenSocket(INVALID_SOCKET), m_fpAcceptEx(nullptr){
@@ -18,7 +19,7 @@ Listener::~Listener()
 
 
 
-bool Listener::StartListen(int port, int backlog)
+bool Listener::StartListen(int port, IocpCore* iocp, int backlog)
 {
 	// 1. 소켓 생성 (Overlapped 속성 필수)
 	m_listenSocket = ::WSASocket(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_OVERLAPPED);
@@ -46,14 +47,20 @@ bool Listener::StartListen(int port, int backlog)
 		return false; 
 	}
 
+	if (iocp->Register((SOCKET)m_listenSocket, 0) == false) return false; 
 	return true; 
 }
 
-bool Listener::RegisterAccept(class Session* session)
+bool Listener::RegisterAccept(class Session* session, IocpCore* iocp)
 {
 	// 1. 클라이언트 소켓 생성
 	SOCKET clientSock = ::WSASocket(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_OVERLAPPED);
+	if (clientSock == INVALID_SOCKET) return false;
+
 	session->SetSocket(clientSock);
+
+	// OS에게 " 이 소켓에서 일어나는 모든 일은 iocp로 보고해줘" 등록
+	iocp->Register(clientSock, (ULONG_PTR)session); 
 
 	// 2. AcceptEx 호출
 	DWORD bytesReceived = 0;
@@ -62,7 +69,7 @@ bool Listener::RegisterAccept(class Session* session)
 	if (FALSE == m_fpAcceptEx(m_listenSocket, clientSock,
 		session->GetAcceptBuffer(), 0, 
 		sizeof(sockaddr_in) + 16, sizeof(sockaddr_in) + 16, 
-		&bytesReceived, (LPOVERLAPPED)session->GetOverlapped()))
+		&bytesReceived, (LPOVERLAPPED)session->GetAcceptOverlapped()))
 	{
 		if (::WSAGetLastError() != WSA_IO_PENDING) return false; 
 	}

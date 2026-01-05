@@ -1,17 +1,17 @@
 #include "SessionManager.h"
 #include "Session.h"
 
-SessionManager::SessionManager(int maxSessionCount)
+void SessionManager::Init(int maxSessionCount)
 {
-	m_sessions.reserve(maxSessionCount);
-
-	for (int i=0 ;i<maxSessionCount; i++)
+	std::lock_guard<std::mutex> lock(m_mutex);
+	for (int i=0; i<maxSessionCount; i++)
 	{
 		Session* session = new Session();
 		m_sessions.push_back(session);
-		m_freeSessions.push(session); 
+		m_freeSessions.push(session); // 처음에 모두 빌려줄 수 있는 상태로 큐에 넣음 
 	}
 }
+
 
 SessionManager::~SessionManager()
 {
@@ -21,7 +21,7 @@ SessionManager::~SessionManager()
 	}
 }
 
-Session* SessionManager::Pop()
+Session* SessionManager::Acquire()
 {
 	std::lock_guard<std::mutex> lock(m_mutex);
 
@@ -35,7 +35,7 @@ Session* SessionManager::Pop()
 	return session; 
 }
 
-void SessionManager::Push(Session* session)
+void SessionManager::Release(Session* session)
 {
 	std::lock_guard<std::mutex> lock(m_mutex);
 
@@ -44,5 +44,6 @@ void SessionManager::Push(Session* session)
 
 	m_freeSessions.push(session); 
 }
+
 
 

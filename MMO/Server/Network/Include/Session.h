@@ -30,20 +30,32 @@ public:
 
 	void PreRecv(); 
 
-	// AcceptEx를 위해 Overlapped 주소를 넘겨줌
-	WSAOVERLAPPED* GetOverlapped() { return &m_recvOverlapped; }
+	// Accept 전용 Overlapped 주소 넘겨줌 
+	WSAOVERLAPPED* GetAcceptOverlapped() { return &m_acceptOverlapped;  }
+
+	// Recv 전용 Overlapped 주소 넘겨줌 (RegisterRecv에서 사용)
+	WSAOVERLAPPED* GetRecvOverlapped() { return &m_recvOverlapped; }
 
 	// Accept 시 주소 정보를 담을 버퍼 (최소 64바이트 이상 권장)
 	char* GetAcceptBuffer() { return m_acceptBuffer;  }
 
+	void RegisterRecv();
+
+	void OnAccept(SOCKET listenSocket);
+
+	// IOCP용 구조체
+	WSAOVERLAPPED m_acceptOverlapped; // 1번: 접속 대기용
+	WSAOVERLAPPED m_recvOverlapped;	  // 2번: 데이터 수신용
 
 private:
 	SOCKET m_socket = INVALID_SOCKET;
 	RingBuffer m_recvBuffer; // 수신데이터 모아두는 곳
 
-	// IOCP용 구조체
-	WSAOVERLAPPED m_recvOverlapped;
+	
+	
 
-	char m_acceptBuffer[128]; 
+	char m_acceptBuffer[128];
+
+	int32_t _packetProcessLimit = 10;
 };
 

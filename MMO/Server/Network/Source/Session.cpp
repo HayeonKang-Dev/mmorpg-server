@@ -1,5 +1,6 @@
 #include "Session.h"
 #include <iostream>
+#include <MSWSock.h>
 
 Session::Session() : m_recvBuffer(8192) // 8KB 버퍼 할당 
 {
@@ -14,11 +15,20 @@ Session::~Session()
 // 워커 스레드가 "데이터 수신됨"을 알려줄 떄 호출
 void Session::OnRecv(int bytesTransferred)
 {
-	// 1. 이미 데이터는 IOCP에 의해 링버퍼의 '어딘가'에 써졌다고 가정 (WSARecv 예약 시 지정)
-	// 2. 받은 바이트만큼 링버퍼의 writePos를 이동시켜야하지만,
-	//    지금은 간단한 테스트를 위해 수신 직후 ProcessPackets를 호출하는 흐름만 잡기
+	if (bytesTransferred == 0)
+	{
+		// 연결 종료 처리
+		return; 
+	}
 
-	ProcessPackets(); 
+	// [중요] 실제로 데이터가 버퍼에 들어왔으므로 WritePos를 이동시킴
+	m_recvBuffer.MoveWritePos(bytesTransferred);
+
+	// 이제 쌓인 데이터를 패킷 단위로 조립
+	ProcessPackets();
+
+	// 다시 다음 데이터를 받을 준비
+	RegisterRecv(); 
 }
 
 // 패킷 조립
@@ -97,6 +107,43 @@ void Session::PreRecv()
 			// 진짜 에러 발생 시 처리 
 		}
 	}
+}
+
+
+// 수신 예약 
+void Session::RegisterRecv()
+{
+	// Overlapped 구조체 초기화
+	::ZeroMemory(&m_recvOverlapped, sizeof(m_recvOverlapped));
+
+	WSABUF wsaBuf;
+	wsaBuf.buf = m_recvBuffer.GetWriteBufferPtr();
+	wsaBuf.len = m_recvBuffer.GetContinuousFreeSize(); // 일단 연속된 공간만큼만 받음
+
+	DWORD flags = 0;
+	DWORD bytesReceived = 0;
+
+	// Overlapped 구조체를 Recv용으로 설정해서 던짐
+	if (SOCKET_ERROR ==::WSARecv(m_socket, &wsaBuf, 1, &bytesReceived, &flags, &m_recvOverlapped, nullptr))
+	{
+		int errCode = ::WSAGetLastError();
+		if (errCode != WSA_IO_PENDING)
+		{
+			// 실제 에러 처리 로직 필요 
+		}
+	}
+}
+
+void Session::OnAccept(SOCKET listenSocket)
+{
+	// 1. AcceptEx로 생성된 소켓에 리슨 소켓의 특성 입히기
+	::setsockopt(m_socket, SOL_SOCKET, SO_UPDATE_ACCEPT_CONTEXT, (char*)&listenSocket, sizeof(listenSocket));
+
+	// 2. [가장 중요] 접속하자마자 첫 번째 수신 예약 걸어주기
+	// 클라이언트가 send하면 서버 OS가 받도록 함
+	RegisterRecv();
+
+	std::cout << "Client Connected and Ready to Recv!" << std::endl;
 }
 
 
