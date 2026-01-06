@@ -63,6 +63,21 @@ int main()
 		}
 
 		std::cout << "Send Packet: ID(1), Size(6)" << std::endl;
+
+		// 2. 서버가 다시 보낸 데이터 받기
+		char recvBuffer[1024];
+		int recvLen = recv(clientSocket, recvBuffer, 1024, 0);
+		if (recvLen > 0)
+		{
+			PacketHeader* recvHeader = (PacketHeader*)recvBuffer;
+			std::cout << "Echo Received! ID: " << recvHeader->id << ", Size: " << recvHeader->size << std::endl;
+		}
+		else if (recvLen == 0)
+		{
+			std::cout << "Server Disconnected" << std::endl;
+			break; 
+		}
+
 		Sleep(1000); 
 	}
 

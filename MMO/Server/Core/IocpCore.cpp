@@ -5,6 +5,7 @@
 #include <ostream>
 
 #include "Session.h"
+#include "SessionManager.h"
 
 IocpCore::IocpCore()
 {
@@ -65,15 +66,35 @@ bool IocpCore::Dispatch(uint32_t timeoutMs)
 
 		if (bytesTransferred > 0)
 		{
-			// 데이터가 들어옴 -> 로그 출력 및 로직 처리
-			std::cout << "데이터 수신 완료! 바이트: " << bytesTransferred << std::endl;
-			session->OnRecv(bytesTransferred);
+			if (overlapped == session->GetRecvOverlapped())
+			{
+				// 데이터가 들어옴 -> 로그 출력 및 로직 처리
+				std::cout << "데이터 수신 완료! 바이트: " << bytesTransferred << std::endl;
+				session->OnRecv(bytesTransferred);
+			}
+			else if (overlapped == session->GetSendOverlapped())
+			{
+				std::cout << "데이터 송신 완료! 바이트: " << bytesTransferred << std::endl;
+				session->OnSend(bytesTransferred); 
+			}
+			
 		}
 		else
 		{
-			// 연결 종료
-			std::cout << "Client Disconnected" << std::endl;
+			// [세션 회수 로직] 클라이언트가 접속을 끊었거나(0 byte), 에러 발생
+			std::cout << "Client Disconnected. Releasing Session..." << std::endl;
+
 			// 세션 정리 로직 (session->Close() 등) 호출 필요
+			// 1. 세션의 소켓 닫고 내부 버퍼 비우기
+			session->Clear(); 
+
+			// 2. 세션 매니저의 freeSessions 큐로 돌려보내기
+			SessionManager::Get()->Release(session);
+
+			// 3. (opt) 빈 자리 생겼으니 다시 새로운 접속 받을 수 있게
+			// 리스너에 RegisterAccept를 한 번 더 호출해 줄 수도 있음
+			
+			
 		}
 
 		return true;

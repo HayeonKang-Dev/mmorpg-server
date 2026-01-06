@@ -2,6 +2,8 @@
 #include <iostream>
 #include <MSWSock.h>
 
+#include "SessionManager.h"
+
 Session::Session() : m_recvBuffer(8192) // 8KB 버퍼 할당 
 {
 	ZeroMemory(&m_recvOverlapped, sizeof(m_recvOverlapped)); 
@@ -10,6 +12,56 @@ Session::Session() : m_recvBuffer(8192) // 8KB 버퍼 할당
 Session::~Session()
 {
 	if (m_socket != INVALID_SOCKET) closesocket(m_socket); 
+}
+
+bool Session::Send(char* ptr, int len)
+{
+	// 1. 송신할 데이터를 복사해서 큐에 담기 (Backpressure 고려 대상)
+	std::vector<char> sendData(ptr, ptr + len);
+	{
+		std::lock_guard<std::mutex> lock(m_sendQueueMutex);
+		m_sendQueue.push(std::move(sendData));
+
+		// 2. 이미 송신중이라면, 큐에 담기만 하고 리턴
+		if (m_isSending) return true;
+
+		// 3. 송신 중 아니라면, 송신 시작
+		m_isSending = true; 
+	}
+	return RegisterSend(); 
+}
+
+// OS에게 이 데이터를 보내달라 예약 ! 
+bool Session::RegisterSend()
+{
+	// Overlapped 구조체 초기화 필수
+	::ZeroMemory(&m_sendOverlapped, sizeof(m_sendOverlapped));
+
+	// 큐에서 가장 앞에 있는 데이터를 꺼내서 전달
+	// 완료 통지가 올 때 까지 이 데이터는 메모리에 유지되어야 하므로, 큐에서 pop은 완료 시점에 함
+	WSABUF wsaBuf;
+	{
+		std::lock_guard<std::mutex> lock(m_sendQueueMutex);
+		if (m_sendQueue.empty())
+		{
+			m_isSending = false;
+			return false; 
+		}
+		wsaBuf.buf = m_sendQueue.front().data();
+		wsaBuf.len = static_cast<ULONG>(m_sendQueue.front().size()); 
+	}
+
+	DWORD sendBytes = 0;
+	// 수신과 마찬가지로 m_sendOverlapped를 넘겨서 완료를 추적
+	if (SOCKET_ERROR == ::WSASend(m_socket, &wsaBuf, 1, &sendBytes, 0, &m_sendOverlapped, nullptr))
+	{
+		if (::WSAGetLastError() != WSA_IO_PENDING)
+		{
+			m_isSending = false;
+			return false; 
+		}
+	}
+	return true; 
 }
 
 // 워커 스레드가 "데이터 수신됨"을 알려줄 떄 호출
@@ -29,6 +81,28 @@ void Session::OnRecv(int bytesTransferred)
 
 	// 다시 다음 데이터를 받을 준비
 	RegisterRecv(); 
+}
+
+void Session::OnSend(int bytesTransferred)
+{
+	// 1. 송신이 완료된 패킷을 큐에서 제거
+	{
+		std::lock_guard<std::mutex> lock(m_sendQueueMutex);
+		if (m_sendQueue.empty() == false)
+		{
+			m_sendQueue.pop(); 
+		}
+
+		// 2. 더 내보낼 데이터가 없다면 송신 중 플래그 해제
+		if (m_sendQueue.empty())
+		{
+			m_isSending = false;
+			return; 
+		}
+	}
+
+	// 3. 아직 큐에 데이터가 남았다면 다음 패킷 송신 예약
+	RegisterSend(); 
 }
 
 // 패킷 조립
@@ -55,7 +129,8 @@ void Session::ProcessPackets()
 		// 5. 패킷 처리 로직 (현재는 로그만 출력)
 		std::cout << "Packet Received! ID: " << header.id << ", Size: " << header.size << std::endl;
 
-		// 여기에 LogicThread 큐에 넣는 코드가 들어갈 예정 
+		// [에코 연결] 받은 패킷을 그대로 다시 보내기
+		Send(buffer.data(), header.size); 
 	}
 }
 
@@ -113,6 +188,22 @@ void Session::PreRecv()
 // 수신 예약 
 void Session::RegisterRecv()
 {
+
+	// [방어 로직] 버퍼 여유 공간이 너무 적으면 수신 거부
+	// 최소한 헤더 이상 받을 수 있어야 함.
+	if (m_recvBuffer.GetFreeSize() < sizeof(PacketHeader))
+	{
+		std::cout << "Warning: Buffer FUll! Disconnecting ... " << std::endl;
+
+		// 1. 소켓 닫고 메모리 정리
+		this->Clear();
+
+		// 2. 관리자에게 이 세션 재사용 가능하다고 반납
+		SessionManager::Get()->Release(this);
+
+		return; 
+	}
+
 	// Overlapped 구조체 초기화
 	::ZeroMemory(&m_recvOverlapped, sizeof(m_recvOverlapped));
 
