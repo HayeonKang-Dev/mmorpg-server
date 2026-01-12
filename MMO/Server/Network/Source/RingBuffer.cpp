@@ -116,19 +116,23 @@ bool RingBuffer::Read(char* dest, int len)
 bool RingBuffer::Peek(char* dest, int len)
 {
 	if (GetUseSize() < len) return false;
-
-	// 1. 현재 readPos부터 배열 끝까지의 데이터 양 계산
-	int backUseSize = m_capacity - m_readPos;
-
-	// 2. 한 번에 읽을 수 있는 양 만큼 복사
-	int readLen = std::min(len, backUseSize);
-	memcpy(dest, &m_buffer[m_readPos], readLen);
-
-	// 3. 배열 끝에 걸려 못 읽은 데이터가 있다면 맨 앞으로 가서 복사
-	if (len > readLen)
+	if (dest != nullptr)
 	{
-		memcpy(dest + readLen, &m_buffer[0], len - readLen); 
+		// 1. 현재 readPos부터 배열 끝까지의 데이터 양 계산
+		int backUseSize = m_capacity - m_readPos;
+
+		// 2. 한 번에 읽을 수 있는 양 만큼 복사
+		int readLen = std::min(len, backUseSize);
+		memcpy(dest, &m_buffer[m_readPos], readLen);
+
+		// 3. 배열 끝에 걸려 못 읽은 데이터가 있다면 맨 앞으로 가서 복사
+		if (len > readLen)
+		{
+			memcpy(dest + readLen, &m_buffer[0], len - readLen); 
+		}
 	}
+
+	
 
 	return true; 
 }
