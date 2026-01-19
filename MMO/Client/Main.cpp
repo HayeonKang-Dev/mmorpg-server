@@ -1,87 +1,225 @@
 #include <WinSock2.h>
 #include <iostream>
+#include <mutex>
+#include <thread>
 #include <vector>
 #include <WS2tcpip.h>
 
+#include "Protocol.h"
+
+
 #pragma comment(lib, "ws2_32.lib")
 
-// ¼­¹ö¿Í µ¿ÀÏÇÑ Çì´õ
-struct PacketHeader
+// ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½
+/*struct PacketHeader
 {
-	uint16_t size;	// ÆÐÅ¶ ÀüÃ¼ Å©±â (Çì´õ 4 + µ¥ÀÌÅÍ 2 = 6)
-	uint16_t id;	// ÆÐÅ¶ Á¾·ù (1) 
-};
+	uint16_t size;	// ï¿½ï¿½Å¶ ï¿½ï¿½Ã¼ Å©ï¿½ï¿½ (ï¿½ï¿½ï¿½ 4 + ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ 2 = 6)
+	uint16_t id;	// ï¿½ï¿½Å¶ ï¿½ï¿½ï¿½ï¿½ (1) 
+};*/
+
+int32_t myPlayerId = 0;
+std::vector<int32_t> nearbyPlayers;
+std::mutex g_listMutex; // ï¿½ï¿½ï¿½ ï¿½ï¿½È£ï¿½ï¿½ ï¿½Ý°ï¿½ ï¿½ï¿½ï¿½ï¿½
+
+float myX = 500.0f;
+float myY = 500.0f;
+
+void ReceiveThread(SOCKET sock)
+{
+    std::vector<char> buffer;
+    buffer.reserve(4096);
+    char temp[1024];
+
+    while (true)
+    {
+        // 1. ï¿½ï¿½ï¿½ï¿½ï¿½Îºï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ (ï¿½ï¿½ï¿½â¼­ï¿½ï¿½ recvï¿½ï¿½ ï¿½Õ´Ï´ï¿½!)
+        int len = recv(sock, temp, 1024, 0);
+        if (len <= 0) {
+            std::cout << "Disconnected from Server (ReceiveThread)." << std::endl;
+            break;
+        }
+
+        buffer.insert(buffer.end(), temp, temp + len);
+
+        // 2. ï¿½ï¿½Å¶ ï¿½Ø¼ï¿½ ï¿½ï¿½ï¿½ï¿½
+        while (buffer.size() >= sizeof(PacketHeader))
+        {
+            PacketHeader* header = (PacketHeader*)buffer.data();
+            if (buffer.size() < header->size) break;
+
+            // --- [ï¿½ï¿½Å¶ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ Ã³ï¿½ï¿½ ï¿½ï¿½ ï¿½Î±ï¿½ ï¿½ï¿½ï¿½] ---
+            if (header->id == PKT_S_LOGIN) {
+                S_LOGIN* res = (S_LOGIN*)buffer.data();
+                if (res->success) {
+                    myPlayerId = res->playerId;
+                    std::cout << "Login Success! ID: " << myPlayerId << std::endl;
+
+                    // Send C_ENTER_GAME packet
+                    PacketHeader enterGamePkt;
+                    enterGamePkt.size = sizeof(PacketHeader);
+                    enterGamePkt.id = PKT_C_ENTER_GAME;
+                    send(sock, (char*)&enterGamePkt, sizeof(PacketHeader), 0);
+                    std::cout << "Sent C_ENTER_GAME packet" << std::endl;
+                }
+            }
+            else if (header->id == PKT_S_MOVE) {
+                S_MOVE* res = (S_MOVE*)buffer.data();
+                // ï¿½ï¿½ ï¿½Ìµï¿½ ï¿½Î±×´ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½Í¸ï¿½ ï¿½ï¿½ï¿½
+                if (res->playerId != myPlayerId)
+                    std::cout << "[Move] Player " << res->playerId << " -> (" << res->x << ", " << res->y << ")" << std::endl;
+            }
+            else if (header->id == PKT_S_ATTACK) {
+                S_ATTACK* res = (S_ATTACK*)buffer.data();
+                if (res->targetId == myPlayerId)
+                    std::cout << ">>> [ALERT] You are under attack by Player " << res->attackerId << "!" << std::endl;
+                else
+                    std::cout << "[Log] Player " << res->attackerId << " attacks Player " << res->targetId << std::endl;
+            }
+            else if (header->id == PKT_S_DIE) {
+                S_DIE* res = (S_DIE*)buffer.data();
+                std::cout << "!!! [DEATH] Player " << res->playerId << " has been defeated!" << std::endl;
+            }
+            // ReceiveThread ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½Å¶ Ã³ï¿½ï¿½ ï¿½ÎºÐ¿ï¿½ ï¿½ß°ï¿½
+            else if (header->id == PKT_S_SPAWN) {
+                S_SPAWN* pkt = (S_SPAWN*)buffer.data();
+                std::lock_guard<std::mutex> lock(g_listMutex);
+                // ï¿½ßºï¿½ È®ï¿½ï¿½ ï¿½ï¿½ ï¿½ß°ï¿½
+                if (std::find(nearbyPlayers.begin(), nearbyPlayers.end(), pkt->playerId) == nearbyPlayers.end()) {
+                    nearbyPlayers.push_back(pkt->playerId);
+                    std::cout << "[Notice] Player " << pkt->playerId << " Spawned." << std::endl;
+                }
+            }
+            else if (header->id == PKT_S_DESPAWN || header->id == PKT_S_DIE) {
+                // S_DIEï¿½ï¿½ S_DESPAWNï¿½ï¿½ï¿½ï¿½ ï¿½Ø´ï¿½ ID ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ (ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½Ïµï¿½ mutexï¿½ï¿½ ï¿½ß°ï¿½)
+                std::lock_guard<std::mutex> lock(g_listMutex);
+                // nearbyPlayers.erase(...) 
+            }
+            // ... SPAWN/DESPAWN ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½Å¶ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½Ï°ï¿½ Ã³ï¿½ï¿½ ...
+            else if (header->id == PKT_S_RESPAWN)
+            {
+                S_RESPAWN* res = (S_RESPAWN*)buffer.data();
+                std::cout << ">>> [NOTICE] Player " << res->playerId << " is Respawn!" << std::endl;
+                if (res->playerId == myPlayerId)
+                {
+                    std::cout << ">>> [NOTICE] You have Respawned at (" << res->x << ", " << res->y << ")" << std::endl;
+                    myX = res->x;
+                    myY = res->y; 
+                }
+                else
+                {
+                    std::cout << ">>> [NOTICE] Player " << res->playerId << " has Respawned nearby you!" << std::endl;
+                    std::lock_guard<std::mutex> lock(g_listMutex);
+                    if (std::find(nearbyPlayers.begin(), nearbyPlayers.end(), res->playerId) == nearbyPlayers.end())
+                    {
+                        nearbyPlayers.push_back(res->playerId); 
+                    }
+                }
+                
+            }
+
+            buffer.erase(buffer.begin(), buffer.begin() + header->size);
+        }
+    }
+}
+
+
 
 int main()
 {
-	// 1. À©¼Ó ÃÊ±âÈ­
-	WSAData wsaData;
-	if (WSAStartup(MAKEWORD(2,2), &wsaData) != 0) return 0;
+    WSAData wsaData;
+    WSAStartup(MAKEWORD(2, 2), &wsaData);
 
-	// 2. ¼ÒÄÏ »ý¼º
-	SOCKET clientSocket = socket(AF_INET, SOCK_STREAM, 0);
-	if (clientSocket == INVALID_SOCKET) return 0;
+    SOCKET clientSocket = socket(AF_INET, SOCK_STREAM, 0);
 
-	// 3. ¼­¹ö ÁÖ¼Ò ¼³Á¤ (·ÎÄÃ ¼­¹ö Æ÷Æ® 8000)
-	SOCKADDR_IN serverAddr = {};
-	serverAddr.sin_family = AF_INET;
-	serverAddr.sin_port = htons(8000);
-	if (::inet_pton(AF_INET, "127.0.0.1", &serverAddr.sin_addr) <= 0)
-	{
-		std::cout << "IP ÁÖ¼Ò º¯È¯ ½ÇÆÐ" << std::endl;
-		return 0; 
-	}
+    SOCKADDR_IN serverAddr = {};
+    serverAddr.sin_family = AF_INET;
+    serverAddr.sin_port = htons(8001); // ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½Æ®ï¿½ï¿½ ï¿½Â´ï¿½ï¿½ï¿½ È®ï¿½ï¿½ï¿½Ï¼ï¿½ï¿½ï¿½!
+    inet_pton(AF_INET, "127.0.0.1", &serverAddr.sin_addr);
 
-	// 4. ¼­¹ö Á¢¼Ó
-	std::cout << "Connecting to Server..." << std::endl;
-	if (connect(clientSocket, (SOCKADDR*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR)
-	{
-		std::cout << "Connect Error!" << std::endl;
-		return 0; 
-	}
-	std::cout << "Connected!" << std::endl;
+    if (connect(clientSocket, (SOCKADDR*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR) {
+        std::cout << "Connect Error!" << std::endl;
+        return 0;
+    }
+    std::cout << "Connected to Server!" << std::endl;
 
-	// 5. ÆÐÅ¶ µ¥ÀÌÅÍ ±¸¼º
-	// [Header(4 bytes)] + [Data(2 bytes)] = Total 6 bytes
-	char sendBuffer[6];
-	PacketHeader* header = (PacketHeader*)sendBuffer;
-	header->size = 6;
-	header->id = 1;
+    // --- [1ï¿½Ü°ï¿½: ï¿½Î±ï¿½ï¿½ï¿½ ï¿½Ãµï¿½] ---
+    char inputId[32], inputPw[32];
+    std::cout << "Enter User ID: ";
+    std::cin >> inputId;
+    std::cout << "Enter Password: ";
+    std::cin >> inputPw;
 
-	// µ¥ÀÌÅÍ ºÎºÐ (´Ü¼ø Å×½ºÆ®¿ë)
-	sendBuffer[4] = 0x11;
-	sendBuffer[5] = 0x22;
+    C_LOGIN loginPkt;
+    loginPkt.header.id = PKT_C_LOGIN;
+    loginPkt.header.size = sizeof(C_LOGIN);
 
-	// 6. 1ÃÊ¸¶´Ù ¹Ýº¹ Àü¼Û
-	while (1)
-	{
-		int result = send(clientSocket, sendBuffer, 6, 0);
-		if (result == SOCKET_ERROR)
-		{
-			std::cout << "Send Error or Disconnected." << std::endl;
-			break; 
-		}
+    memset(loginPkt.userId, 0, 32);
+    memset(loginPkt.userPw, 0, 32);
+    // std::string ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ char ï¿½è¿­ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½Õ´Ï´ï¿½.
+    strncpy_s(loginPkt.userId, inputId, _TRUNCATE);
+    strncpy_s(loginPkt.userPw, inputPw, _TRUNCATE);
 
-		std::cout << "Send Packet: ID(1), Size(6)" << std::endl;
+    send(clientSocket, (char*)&loginPkt, sizeof(C_LOGIN), 0);
+    std::cout << "Login Request Sent..." << std::endl;
 
-		// 2. ¼­¹ö°¡ ´Ù½Ã º¸³½ µ¥ÀÌÅÍ ¹Þ±â
-		char recvBuffer[1024];
-		int recvLen = recv(clientSocket, recvBuffer, 1024, 0);
-		if (recvLen > 0)
-		{
-			PacketHeader* recvHeader = (PacketHeader*)recvBuffer;
-			std::cout << "Echo Received! ID: " << recvHeader->id << ", Size: " << recvHeader->size << std::endl;
-		}
-		else if (recvLen == 0)
-		{
-			std::cout << "Server Disconnected" << std::endl;
-			break; 
-		}
 
-		Sleep(1000); 
-	}
+    // --- [ï¿½ß¿ï¿½] ï¿½Î±ï¿½ï¿½ï¿½ ï¿½ï¿½Å¶ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ---
+    std::thread t(ReceiveThread, clientSocket);
+    t.detach(); // ï¿½ï¿½×¶ï¿½ï¿½å¿¡ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½
 
-	closesocket(clientSocket);
-	WSACleanup();
-	return 0; 
+    
+
+    // ï¿½ï¿½ï¿½ï¿½ main ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ 1ï¿½Ê¸ï¿½ï¿½ï¿½ "ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½"ï¿½ï¿½ ï¿½Õ´Ï´ï¿½.
+    while (true)
+    {
+        // 1. ï¿½Ìµï¿½ ï¿½ï¿½Å¶ ï¿½Û½ï¿½
+        C_MOVE movePkt;
+        memset(&movePkt, 0, sizeof(C_MOVE));
+
+        movePkt.header.size = sizeof(C_MOVE);
+        movePkt.header.id = PKT_C_MOVE;
+
+        // 1. ï¿½Ìµï¿½ ï¿½ï¿½Ç¥ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ (ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½)
+        myX += (static_cast<float>(rand() % 10 - 5));
+        myY += (static_cast<float>(rand() % 10 - 5));
+
+        movePkt.x = myX;
+        movePkt.y = myY;
+
+        // Yï¿½ï¿½Ç¥ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½
+        if (abs(movePkt.y) < 0.01f) movePkt.y = 0.0f;
+
+        send(clientSocket, (char*)&movePkt, sizeof(C_MOVE), 0);
+
+        // 2. ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ (20% È®ï¿½ï¿½)
+        if (rand() % 5 == 0) {
+            C_ATTACK attackPkt;
+            attackPkt.header = { sizeof(C_ATTACK), PKT_C_ATTACK };
+
+            // È®ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½(0) ï¿½Ç´ï¿½ ï¿½ï¿½ï¿½ï¿½(1) ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½
+            attackPkt.attackType = rand() % 2;
+
+            if (attackPkt.attackType == 0) { // ï¿½ï¿½ï¿½ï¿½ Å¸ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½
+                std::lock_guard<std::mutex> lock(g_listMutex); // ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½Ï°ï¿½ ï¿½ï¿½ï¿½
+                if (!nearbyPlayers.empty()) {
+                    int randomIdx = rand() % nearbyPlayers.size();
+                    attackPkt.targetId = nearbyPlayers[randomIdx];
+                    std::cout << ">>> [Input] Sending MELEE Attack to Player " << attackPkt.targetId << std::endl;
+                    send(clientSocket, (char*)&attackPkt, sizeof(C_ATTACK), 0);
+                }
+            }
+            else { // ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½
+                attackPkt.targetId = 0; // Å¸ï¿½ï¿½ ï¿½Ê¿ï¿½ ï¿½ï¿½ï¿½ï¿½
+                std::cout << ">>> [Input] Sending RADIAL Attack!" << std::endl;
+                send(clientSocket, (char*)&attackPkt, sizeof(C_ATTACK), 0);
+            }
+        }
+
+        // ï¿½Ö±â¸¦ ï¿½à°£ Æ²ï¿½î¼­ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ (0.8ï¿½ï¿½ ~ 1.2ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½)
+        Sleep(800 + rand() % 400);
+    }
+
+    closesocket(clientSocket);
+    WSACleanup();
+    return 0;
 }
