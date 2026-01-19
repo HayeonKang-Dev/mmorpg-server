@@ -1,6 +1,8 @@
 #pragma once
 #include "Listener.h"
 
+class Listener;
+
 class IocpCore
 {
 public:
@@ -14,9 +16,12 @@ public:
 	bool Register(SOCKET socket, ULONG_PTR completionKey = 0);
 
 	// 완료된 작업 확인 (GetQueuedCompletionStatus 호출)
-	bool Dispatch(uint32_t timeoutMs = INFINITE); 
+	bool Dispatch(uint32_t timeoutMs = INFINITE);
+
+	void SetListener(Listener* listener) { m_listener = listener; }
 
 private:
 	HANDLE m_iocpHandle = INVALID_HANDLE_VALUE;
+	Listener* m_listener = nullptr; 
 };
 

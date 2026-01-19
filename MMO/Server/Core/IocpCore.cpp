@@ -57,6 +57,17 @@ bool IocpCore::Dispatch(uint32_t timeoutMs)
 			// 실제로 데이터를 받을 수 있도록 그물을 던집니다.
 			session->RegisterRecv();
 
+			// AcceptEx 채워주기
+			Session* newSession = SessionManager::Get()->Acquire();
+			if (newSession == nullptr)
+			{
+				std::cout << "[Warning] 세션 풀 고갈! 접속 거부" << std::endl; 
+			}
+			if (newSession && m_listener)
+			{
+				m_listener->RegisterAccept(newSession, this); 
+			}
+
 			return true;
 		}
 
@@ -93,7 +104,11 @@ bool IocpCore::Dispatch(uint32_t timeoutMs)
 
 			// 3. (opt) 빈 자리 생겼으니 다시 새로운 접속 받을 수 있게
 			// 리스너에 RegisterAccept를 한 번 더 호출해 줄 수도 있음
-			
+			if (m_listener)
+			{
+				Session* newSession = SessionManager::Get()->Acquire();
+				if (newSession) m_listener->RegisterAccept(newSession, this); 
+			}
 			
 		}
 
@@ -101,9 +116,13 @@ bool IocpCore::Dispatch(uint32_t timeoutMs)
 	}
 	else
 	{
-		int errCode = ::WSAGetLastError();
-		if (errCode == WAIT_TIMEOUT) return false;
-		return false;
+		// GQCS 자체가 실패
+		if (overlapped != nullptr)
+		{
+			Session* session = reinterpret_cast<Session*>(completionKey);
+			session->Clear();
+			SessionManager::Get()->Release(session); 
+		};
 	}
 }
 
