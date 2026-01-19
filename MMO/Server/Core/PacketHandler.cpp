@@ -4,6 +4,8 @@
 #include "../DB/DBManager.h"
 #include "../Game/World.h"
 
+static int32_t g_IdCounter = 1; 
+
 void PacketHandler::Handle_C_LOGIN(Session* session, char* buffer)
 {
     char* idPtr = buffer;
@@ -15,12 +17,12 @@ void PacketHandler::Handle_C_LOGIN(Session* session, char* buffer)
 
     std::cout << "[Logic] Login Request - ID: " << userId << " / PW: " << userPw << std::endl;
 
-    // DB Äõ¸®¿¡ PW¸¦ ÇÔ²² ³Ñ±é´Ï´Ù.
+    // DB ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ PWï¿½ï¿½ ï¿½Ô²ï¿½ ï¿½Ñ±ï¿½Ï´ï¿½.
     DBManager::Get()->PushQuery([session, userId, userPw](sql::Connection* con)
         {
             try
             {
-                // 1. À¯Àú Á¶È¸ (password ÄÃ·³ Æ÷ÇÔ)
+                // 1. ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½È¸ (password ï¿½Ã·ï¿½ ï¿½ï¿½ï¿½ï¿½)
                 std::unique_ptr<sql::PreparedStatement> pstmt(con->prepareStatement(
                     "SELECT user_name, level, password FROM accounts WHERE user_id = ?"));
                 pstmt->setString(1, userId);
@@ -32,16 +34,20 @@ void PacketHandler::Handle_C_LOGIN(Session* session, char* buffer)
 
                 if (isExist)
                 {
-                    // --- ±âÁ¸ À¯Àú Á¸Àç: ºñ¹ø Ã¼Å© ---
+                    // --- ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½: ï¿½ï¿½ï¿½ Ã¼Å© ---
                     std::string dbPw = res->getString("password");
 
-                    if (dbPw == userPw) // [ÇÙ½É] ºñ¹ø ÀÏÄ¡ È®ÀÎ
+                    if (dbPw == userPw) // [ï¿½Ù½ï¿½] ï¿½ï¿½ï¿½ ï¿½ï¿½Ä¡ È®ï¿½ï¿½
                     {
+                        // ï¿½ï¿½ï¿½ï¿½ ID ï¿½Ò´ï¿½
+                        int32_t assignedId = g_IdCounter++;
+                        session->SetPlayerId(assignedId); 
+
                         std::string name = res->getString("user_name");
                         int level = res->getInt("level");
                         std::cout << "[DB] Password Match! User: " << name << std::endl;
 
-                        // ·Î±×ÀÎ ½Ã°¢ ¾÷µ¥ÀÌÆ®
+                        // ï¿½Î±ï¿½ï¿½ï¿½ ï¿½Ã°ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Æ®
                         std::unique_ptr<sql::PreparedStatement> updatePstmt(con->prepareStatement(
                             "UPDATE accounts SET last_login = NOW() WHERE user_id = ?"));
                         updatePstmt->setString(1, userId);
@@ -49,26 +55,32 @@ void PacketHandler::Handle_C_LOGIN(Session* session, char* buffer)
 
                         resPkt.success = true;
                         resPkt.level = level;
+                        resPkt.playerId = assignedId;
                         strncpy_s(resPkt.name, name.c_str(), _TRUNCATE);
                     }
                     else
                     {
-                        // [½ÇÆÐ] ºñ¹ø Æ²¸²
+                        // [ï¿½ï¿½ï¿½ï¿½] ï¿½ï¿½ï¿½ Æ²ï¿½ï¿½
                         std::cout << "[DB] Password Mismatch for ID: " << userId << std::endl;
                         resPkt.success = false;
                     }
                 }
                 else
                 {
-                    // --- ½Å±Ô À¯Àú: ÀÔ·ÂÇÑ ºñ¹øÀ¸·Î °¡ÀÔ ---
+                    // --- ï¿½Å±ï¿½ ï¿½ï¿½ï¿½ï¿½: ï¿½Ô·ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ---
                     std::unique_ptr<sql::PreparedStatement> insertPstmt(con->prepareStatement(
                         "INSERT INTO accounts(user_id, password, user_name, level) VALUES (?, ?, ?, ?)"));
                     insertPstmt->setString(1, userId);
-                    insertPstmt->setString(2, userPw); // ÀÔ·Â¹ÞÀº ºñ¹ø ÀúÀå
+                    insertPstmt->setString(2, userPw); // ï¿½Ô·Â¹ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½
                     insertPstmt->setString(3, userId);
                     insertPstmt->setInt(4, 1);
                     insertPstmt->executeUpdate();
                     con->commit();
+
+                    // ï¿½ï¿½ï¿½ï¿½ ID ï¿½Ò´ï¿½ 
+                    int32_t assignedId = g_IdCounter++;
+                    session->SetPlayerId(assignedId);
+
 
                     std::cout << "[DB] New User Registered: " << userId << " with PW: " << userPw << std::endl;
 
@@ -77,13 +89,15 @@ void PacketHandler::Handle_C_LOGIN(Session* session, char* buffer)
                     strncpy_s(resPkt.name, userId.c_str(), _TRUNCATE);
                 }
 
-                // °á°ú ¹è´Þ...
-                Job dbResultJob;
-                dbResultJob.session = session;
-                dbResultJob.header = resPkt.header;
+                // DB ì¿¼ë¦¬ ì„±ê³µ ë° íŒ¨í‚· ì¤€ë¹„ ì™„ë£Œ í›„
+                Job* dbResultJob = JobPool::Pop();
+                dbResultJob->session = session;
+                dbResultJob->header = resPkt.header;
+
                 char* ptr = reinterpret_cast<char*>(&resPkt);
-                dbResultJob.data.assign(ptr, ptr + sizeof(S_LOGIN));
-                LogicManager::Get()->PushJob(std::move(dbResultJob));
+                dbResultJob->data.assign(ptr, ptr + sizeof(S_LOGIN));
+
+                LogicManager::Get()->PushJob(dbResultJob);
             }
             catch (sql::SQLException& e) { std::cerr << "[DB Error] " << e.what() << std::endl; }
         });
@@ -91,50 +105,111 @@ void PacketHandler::Handle_C_LOGIN(Session* session, char* buffer)
 
 void PacketHandler::Handle_C_MOVE(Session* session, char* buffer)
 {
-	// 1. »óÅÂ Ã¼Å© (GAME) »óÅÂ¿¡¸¸ ÀÌµ¿ °¡´É
-	// 2. ÀÌµ¿ ·ÎÁ÷ ¼öÇà (ÁÂÇ¥ °»½Å)
-	// 3. AOI(½Ã¾ß) Ã¼Å© ÈÄ ÁÖº¯ À¯Àú¿¡°Ô¸¸ S_MOVE ºê·ÎµåÄ³½ºÆ®
+    C_MOVE* pkt = reinterpret_cast<C_MOVE*>(buffer);
+    Player* player = session->GetPlayer();
+    
 
-	C_MOVE* pkt = reinterpret_cast<C_MOVE*>(buffer);
+    if (player == nullptr)
+    {
+    	
+        std::cout << "[Error] C_MOVE: Player is nullptr for session " << session->GetPlayerId() << std::endl;
+        return;
+    }
+	if (player->m_Hp <= 0) return;
 
-	if (session->GetState() != PlayerState::GAME) return;
+    std::cout << "[Logic] C_MOVE: Player " << player->GetPlayerId() << " -> Pos: (" << pkt->x << ", " << pkt->y << ")" << std::endl;
 
-	float* posX = reinterpret_cast<float*>(buffer);
-	float* posY = reinterpret_cast<float*>(buffer + 4);
-	std::cout << "[Logic] C_MOVE: Player " << session->GetPlayerId() << " -> Pos(" << *posX << ", " << *posY << ")" << std::endl;
-
-	World::Get()->HandleMove(session, pkt->x, pkt->y);
-
-
-
+    // World::HandleMoveë¥¼ í˜¸ì¶œí•´ì•¼ ê·¸ë¦¬ë“œ ì—…ë°ì´íŠ¸ ë° ë¸Œë¡œë“œìºìŠ¤íŠ¸ê°€ ì²˜ë¦¬ë¨!
+    World::Get()->HandleMove(session, pkt->x, pkt->y);
 }
 
 void PacketHandler::Handle_C_ENTER_GAME(Session* session, char* buffer)
 {
-	// 1. »óÅÂ Ã¼Å©
-	if (session->GetState() != PlayerState::LOBBY) return;
+	// 1. State ì²´í¬
+	if (session->GetState() != PlayerState::LOBBY)
+	{
+		std::cout << "[Warning] C_ENTER_GAME: Player " << session->GetPlayerId() << " is not in LOBBY state" << std::endl;
+		return;
+	}
 
-	// 2. ¿ùµå ÀÔÀå
-	World::Get()->EnterGame(session); 
+	std::cout << "[Logic] C_ENTER_GAME: Player " << session->GetPlayerId() << " entering game..." << std::endl;
+
+	// 2. ê²Œìž„ ìž…ìž¥
+	session->SetState(PlayerState::GAME);
+	World::Get()->EnterGame(session);
 }
 
 void PacketHandler::Handle_S_LOGIN(Session* session, char* buffer)
 {
 	if (session == nullptr || buffer == nullptr) return;
 
-	// [Logic Threa] DB¿¡¼­ ÀÎÁõ ¸¶Ä¡°í µ¹¾Æ¿Â ½ÃÁ¡
 	std::cout << "[Logic] DB Search Success! Setting PlayerState" << std::endl;
 
-	// 1. Àü´Þ¹ÞÀº ¹öÆÛ(Job.data)¸¦ S_LOGIN ±¸Á¶Ã¼·Î ÇØ¼®
-	// buffer¿¡´Â Çì´õ°¡ Æ÷ÇÔµÈ ÀüÃ¼ S_LOGIN µ¥ÀÌÅÍ µé¾îÀÖÀ½..
 	S_LOGIN* pkt = reinterpret_cast<S_LOGIN*>(buffer);
 
-	// 2. Å¬¶óÀÌ¾ðÆ®¿¡ ½ÇÁ¦ ÀÀ´ä ÆÐÅ¶ Àü¼Û
+	// Send login response to client
 	session->Send((char*)pkt, sizeof(S_LOGIN));
 
-	// 3. ÀÎ°ÔÀÓ ÀÔÀå
-	session->SetState(PlayerState::GAME);
-	World::Get()->EnterGame(session);
+	// Set state to LOBBY (NOT GAME yet - wait for C_ENTER_GAME packet)
+	session->SetState(PlayerState::LOBBY);
 
-	std::cout << "[Logic] Login Success & World Entered. " << std::endl;
+	std::cout << "[Logic] Login Success. Waiting for C_ENTER_GAME..." << std::endl;
 }
+
+void PacketHandler::Handle_C_ATTACK(Session* session, char* buffer)
+{
+    C_ATTACK* pkt = reinterpret_cast<C_ATTACK*>(buffer);
+    Player* attacker = session->GetPlayer();
+    if (attacker == nullptr || attacker->m_Hp <= 0) return;
+
+    if (pkt->attackType == 0)
+    {
+        Session* targetSession = World::Get()->FindSession(pkt->targetId);
+        if (targetSession)
+        {
+            float dist = World::CalculateDistance(session, targetSession);
+            if (dist <= ATTACK_RANGE_MEL)
+            {
+	            Player* target = targetSession->GetPlayer();
+				target->OnDamaged(10, attacker);
+
+                S_ATTACK res;
+                res.header = { sizeof(S_ATTACK), PKT_S_ATTACK };
+                res.attackerId = attacker->GetPlayerId();
+                res.targetId = target->GetPlayerId();
+
+                World::Get()->BroadcastPacketToObservers(session, (char*)&res, sizeof(res));
+                std::cout << "[Combat] Player " << res.attackerId << " attacks Player " << res.targetId << std::endl;
+                
+            }
+            
+        }
+    }
+    else if (pkt->attackType == 1)
+    {
+        std::cout << "[Combat] Player " << attacker->GetPlayerId() << " uses RAIDAL Attack!" << std::endl;
+        GridPos pos = World::Get()->GetGridPos(session->GetX(), session->GetY());
+        
+		for (Session* other : World::Get()->GetGrids()[pos.y][pos.x])
+		{
+            if (other == session) continue;
+            float dist = World::CalculateDistance(session, other);
+            if (dist <= ATTACK_RANGE_RADIAL)
+            {
+                if (other->GetPlayer() != nullptr)
+                {
+	                other->GetPlayer()->OnDamaged(20, attacker);
+
+	                S_ATTACK res;
+	                res.header = { sizeof(S_ATTACK), PKT_S_ATTACK };
+	                res.attackerId = attacker->GetPlayerId();
+	                res.targetId = other->GetPlayerId();
+
+	                World::Get()->BroadcastPacketToObservers(session, (char*)&res, sizeof(res)); 
+                }
+                
+            }
+		}
+    }
+}
+
