@@ -106,28 +106,21 @@ void World::EnterGame(Session* session)
 void World::LeaveGame(Session* session)
 {
 	GridPos pos = GetGridPos(session->GetX(), session->GetY());
+	int visionRange = 1;
 
-	// 1. �ֺ� ������� �� ������ٰ� �˸�.
-	for (int dy=-2; dy<=2; dy++)
+	// 1. 내 실제 위치 그리드의 플레이어들에게 DESPAWN
+	for (Session* other : grids[pos.y][pos.x])
 	{
-		for (int dx = -2; dx <= 2; dx++)
-		{
-			GridPos checkPos = { pos.x + dx, pos.y + dy };
-			if (IsInvalid(checkPos)) continue;
-
-			for (Session* other : grids[checkPos.y][checkPos.x])
-			{
-				if (other == session) continue;
-				SendDespawn(other, session);
-			}
-		}
+		if (other == session) continue;
+		SendDespawn(other, session);
 	}
 
-	// 2. ���� �����Ϳ��� ����
-	grids[pos.y][pos.x].erase(session);
+	// 2. 내 시야 9칸에서 모두 제거
+	RemoveFromVisionGrids(session, pos, visionRange);
+
 	sessions.erase(session->GetPlayerId());
 
-	std::cout << "[world] Player " << session->GetPlayerId() << " Left Game<<"<<std::endl;
+	std::cout << "[World] Player " << session->GetPlayerId() << " Left Game" << std::endl;
 }
 
 void World::HandleMove(Session* session, float x, float y)
@@ -137,73 +130,53 @@ void World::HandleMove(Session* session, float x, float y)
 
 	session->SetPos(x, y);
 
-	// �þ� ����
+	int visionRange = 1;
+
 	if (!(oldPos == newPos))
 	{
-		grids[oldPos.y][oldPos.x].erase(session);
-		grids[newPos.y][newPos.x].insert(session);
-
-		UpdateVision(session, oldPos, newPos); 
+		// 겹치지 않는 부분만 제거/추가 (최적화!)
+		UpdateVisionGrids(session, oldPos, newPos, visionRange);
+		UpdateVision(session, oldPos, newPos);
 	}
 	else
 	{
-		BroadcastMove(session); // �׸��� �̵� ������ �ֺ� 9ĭ�� MOVE ���� 
+		// 같은 그리드 내 이동 → 내 실제 위치 그리드만 Broadcast
+		BroadcastMove(session);
 	}
 }
 
 void World::UpdateVision(Session* session, GridPos oldPos, GridPos newPos)
 {
-	// 1. ���� ���� ���� �� ����� (ENTER)
-	// ���� 3x3���� ���� 3x3�� ���� ��� ã��
-	for (int dy=-1; dy<=1; dy++)
+	// 1. 새로 보이게 된 플레이어 처리 (SPAWN/MOVE)
+	for (Session* other : grids[newPos.y][newPos.x])
 	{
-		for (int dx=-1; dx<=1; dx++)
+		if (other == session) continue;
+
+		// 이전 위치에서 1칸 이상 벗어났다면 → 새로 보임
+		if (abs(newPos.x - oldPos.x) > 1 || abs(newPos.y - oldPos.y) > 1)
 		{
-			GridPos cur = { newPos.x + dx, newPos.y + dy };
-			if (IsInvalid(cur)) continue;
-
-			for (Session* other : grids[cur.y][cur.x])
-			{
-				if (other == session) continue;
-
-				// ���� ���� ���
-				if (abs(cur.x-oldPos.x) > 1 || abs(cur.y - oldPos.y) > 1)
-				{
-					SendSpawn(other, session);
-					SendSpawn(session, other); 
-				}
-				else
-				{
-					SendMove(other, session); 
-				}
-			}
+			SendSpawn(other, session);
+			SendSpawn(session, other);
+		}
+		else
+		{
+			// 계속 보이던 애는 MOVE만
+			SendMove(other, session);
 		}
 	}
 
-	// Leave ó�� - Hysterisis
-	for (int dy=-1; dy <= 1; dy++)
+	// 2. 시야에서 벗어난 플레이어 처리 (DESPAWN) 
+	for (Session* other : grids[oldPos.y][oldPos.x])
 	{
-		for (int dx=-1; dx <= 1; dx++)
+		if (other == session) continue;
+
+		// 새 위치에서 2칸 이상 멀어졌다면 → DESPAWN
+		if (abs(oldPos.x - newPos.x) > 2 || abs(oldPos.y - newPos.y) > 2)
 		{
-			GridPos old = { oldPos.x + dx, oldPos.y + dy };
-			if (IsInvalid(old)) continue;
-
-			for (Session* other : grids[old.y][old.x])
-			{
-				if (other == session) continue;
-
-				// ���ο� ��ġ ���� 5x5 ������ �־����ٸ� LEAVE
-				// Grid Ư�� ��, ��輱���� �÷��̾ ���Դ� ������ �ݺ����� �� leave, enter�� �ݺ� �߻��ϴ� ���� ����
-				if (abs(old.x - newPos.x) > 2 || abs(old.y - newPos.y) > 2)
-				{
-					SendDespawn(other, session);
-					SendDespawn(session, other); 
-				}
-			}
+			SendDespawn(other, session);
+			SendDespawn(session, other);
 		}
 	}
-
-
 }
 
 void World::BroadcastMove(Session* session)
@@ -211,28 +184,37 @@ void World::BroadcastMove(Session* session)
 	GridPos pos = GetGridPos(session->GetX(), session->GetY());
 
 	S_MOVE pkt;
-
 	pkt.header.id = PKT_S_MOVE;
 	pkt.header.size = sizeof(S_MOVE);
 	pkt.playerId = session->GetPlayerId();
 	pkt.x = session->GetX();
 	pkt.y = session->GetY();
 
-	for (int dy = -1; dy <= 1; dy++)
+	BroadcastPacketToObservers(session, (char*)&pkt, pkt.header.size); 
+}
+
+void World::BroadcastDie(Session* session)
+{
+	GridPos pos = GetGridPos(session->GetX(), session->GetY());
+
+	S_DIE pkt;
+	pkt.header = { sizeof(S_DIE), PKT_S_DIE };
+	pkt.playerId = session->GetPlayerId();
+
+	BroadcastPacketToObservers(session, (char*)&pkt, pkt.header.size);
+
+	std::cout << "[World] Player " << session->GetPlayerId() << " Died. Broadcast sent to observers in grid [" << pos.x << ", " << pos.y << "]" << std::endl;
+
+}
+
+void World::BroadcastPacketToObservers(Session* session, char* ptr, int len)
+{
+	GridPos pos = GetGridPos(session->GetX(), session->GetY());
+
+	for (Session* observer : grids[pos.y][pos.x])
 	{
-		for (int dx=-1; dx<=1; dx++)
-		{
-			int nx = pos.x + dx;
-			int ny = pos.y + dy;
-
-			if (nx < 0 || nx >= GRID_COUNT || ny < 0 || ny >= GRID_COUNT) continue;
-
-			for (Session* other : grids[ny][nx])
-			{
-				if (other == session) continue;
-				other->Send((char*)&pkt, pkt.header.size); 
-			}
-		}
+		if (observer == nullptr) continue;
+		observer->Send(ptr, len); 
 	}
 }
 
@@ -245,7 +227,7 @@ void World::SendSpawn(Session* target, Session* obj)
 	pkt.playerId = obj->GetPlayerId();
 	pkt.x = obj->GetX();
 	pkt.y = obj->GetY();
-	target->Send((char*)&pkt, pkt.header.size); 
+	target->Send((char*)&pkt, pkt.header.size);
 }
 
 void World::SendDespawn(Session* target, Session* obj)
@@ -255,7 +237,22 @@ void World::SendDespawn(Session* target, Session* obj)
 	S_DESPAWN pkt;
 	pkt.header = { sizeof(S_DESPAWN), PKT_S_DESPAWN };
 	pkt.playerId = obj->GetPlayerId();
-	target->Send((char*)&pkt, pkt.header.size); 
+	target->Send((char*)&pkt, pkt.header.size);
 }
 
+float World::CalculateDistance(Session* s1, Session* s2)
+{
+	if (s1 == nullptr || s2 == nullptr) return 99999.0f;
+	float dx = s1->GetX() - s2->GetX();
+	float dy = s1->GetY() - s2->GetY();
+	return std::sqrt(dx * dx + dy * dy);
+}
+
+Session* World::FindSession(int32_t playerId)
+{
+	auto it = sessions.find(playerId);
+	if (it == sessions.end()) return nullptr;
+
+	return it->second;
+}
 
