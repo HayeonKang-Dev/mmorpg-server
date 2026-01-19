@@ -1,3 +1,4 @@
+// Protocol.h
 #pragma once
 #include <cstdint>
 
@@ -11,6 +12,10 @@ enum PacketID : uint16_t
     PKT_C_ENTER_GAME = 5,
     PKT_S_SPAWN = 6,    // 나중에 쓸 것들 미리 추가
     PKT_S_DESPAWN = 7,
+    PKT_S_DIE = 8,
+    PKT_S_RESPAWN = 9,
+    PKT_C_ATTACK = 10,
+    PKT_S_ATTACK = 11, 
 };
 
 #pragma pack(push, 1)
@@ -35,6 +40,7 @@ struct S_LOGIN
     bool success;
     int level;
     char name[32];
+    int32_t playerId;
 };
 
 struct C_MOVE
@@ -64,6 +70,34 @@ struct S_DESPAWN
 {
     PacketHeader header;
     int32_t playerId;
+};
+
+struct C_ATTACK
+{
+    PacketHeader header;
+    int32_t attackType;
+    int32_t targetId;
+};
+
+struct S_ATTACK
+{
+    PacketHeader header;
+    int32_t attackerId;
+    int32_t targetId;
+};
+
+struct S_DIE
+{
+    PacketHeader header;
+    int32_t playerId;
+};
+
+struct S_RESPAWN
+{
+    PacketHeader header;
+    int32_t playerId;
+    float x;
+    float y;
 };
 
 
