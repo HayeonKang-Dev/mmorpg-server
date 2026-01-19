@@ -1,12 +1,44 @@
 #pragma once
 #include "Session.h"
 #include <PacketHandler.h>
+#include <stack>
+
+#include "World.h"
 
 struct Job
 {
 	Session* session;
 	PacketHeader header;
 	std::vector<char> data; // 패킷 복사본 
+};
+
+class JobPool
+{
+public:
+	static Job* Pop()
+	{
+		std::lock_guard<std::mutex> lock(m_poolMutex);
+		if (m_pool.empty())
+		{
+			return new Job(); 
+		}
+		Job* job = m_pool.top();
+		m_pool.pop();
+		return job; 
+	}
+
+	static void Push(Job* job)
+	{
+		job->session = nullptr;
+		job->data.clear();
+
+		std::lock_guard<std::mutex> lock(m_poolMutex);
+		m_pool.push(job); 
+	}
+
+private:
+	static std::stack<Job*> m_pool;
+	static std::mutex m_poolMutex; 
 };
 
 class LogicManager
@@ -19,10 +51,10 @@ public:
 	}
 
 	// IO 스레드들이 호출하는 함수
-	void PushJob(Job job)
+	void PushJob(Job* job)
 	{
 		std::lock_guard<std::mutex> lock(m_mutex);
-		jobs.push(std::move(job)); // 불필요한 복사 방지 
+		jobs.push(job); // 불필요한 복사 방지 
 		cv.notify_one(); 
 	}
 
@@ -31,27 +63,31 @@ public:
 	{
 		while (1)
 		{
-			std::vector<Job> currJobs;
+			std::vector<Job*> currJobs;
 			{
 				std::unique_lock<std::mutex> lock(m_mutex);
 
-				// 1. 작업 올 때 까지 대기
-				cv.wait(lock, [this] {return !jobs.empty() || m_stop; });
+				cv.wait_for(lock, std::chrono::milliseconds(100), [this]
+					{
+						return !jobs.empty() || m_stop;
+					});
+
 				if (m_stop && jobs.empty()) break;
 
-				// 2. 현재 쌓인 모든 작업 꺼내오기
-				// => 락 잡는 횟수를 줄여 성능 상승
 				while (!jobs.empty())
 				{
-					currJobs.push_back(std::move(jobs.front()));
+					currJobs.push_back(jobs.front());
 					jobs.pop(); 
 				}
 			}
-			// 3. 락 풀고 작업 일괄 처리 (MPSC Consumer)
-			for (auto & job: currJobs)
+
+			for (auto* job: currJobs)
 			{
-				PacketHandler::HandlePacket(job.session, &job.header, job.data.data());
+				PacketHandler::HandlePacket(job->session, &job->header, job->data.data());
+				JobPool::Push(job); 
 			}
+
+			World::Get()->Update(); 
 		}
 		
 	}
@@ -63,7 +99,7 @@ public:
 	}
 
 private:
-	std::queue<Job> jobs;
+	std::queue<Job*> jobs;
 	std::mutex m_mutex;
 	std::condition_variable cv;
 
