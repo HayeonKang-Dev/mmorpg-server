@@ -1,4 +1,4 @@
-#include "World.h"
+ï»¿#include "World.h"
 
 #include <cppconn/driver.h>
 
@@ -6,43 +6,99 @@
 #include "PacketHandler.h"
 #include "Protocol.h"
 
-void World::EnterGame(Session* session)
+// Helper: ì‹œì•¼ ë²”ìœ„ ë‚´ ëª¨ë“  ê·¸ë¦¬ë“œì— ì„¸ì…˜ ë“±ë¡
+void World::InsertToVisionGrids(Session* session, GridPos centerPos, int visionRange)
 {
-	// 1. ÃÊ±â ÁÂÇ¥ ¼³Á¤
-	// test¿ëÀ¸·Î 500, 500
-	float startX = 500.0f;
-	float startY = 500.0f;
-	session->SetPos(startX, startY);
-
-	GridPos pos = GetGridPos(startX, startY);
-
-	//2. World  ¼¼¼Ç ¸ñ·Ï¿¡ Ãß°¡
+	for (int dy = -visionRange; dy <= visionRange; dy++)
 	{
-		sessions[session->GetPlayerId()] = session;
-		grids[pos.y][pos.x].insert(session); 
-	}
-
-	// 3. ÁÖº¯ 3x3¿¡ ³ª ¾Ë¸®±â
-	for (int dy=-1; dy<=1; dy++)
-	{
-		for (int dx=-1; dx <= 1; dx++)
+		for (int dx = -visionRange; dx <= visionRange; dx++)
 		{
-			GridPos checkPos = { pos.x + dx, pos.y + dy };
-			if (IsInvalid(checkPos)) continue;
+			GridPos pos = { centerPos.x + dx, centerPos.y + dy };
+			if (IsInvalid(pos)) continue;
+			grids[pos.y][pos.x].insert(session);
+		}
+	}
+}
 
-			for (Session* other : grids[checkPos.y][checkPos.x])
+// Helper: ì‹œì•¼ ë²”ìœ„ ë‚´ ëª¨ë“  ê·¸ë¦¬ë“œì—ì„œ ì„¸ì…˜ ì œê±°
+void World::RemoveFromVisionGrids(Session* session, GridPos centerPos, int visionRange)
+{
+	for (int dy = -visionRange; dy <= visionRange; dy++)
+	{
+		for (int dx = -visionRange; dx <= visionRange; dx++)
+		{
+			GridPos pos = { centerPos.x + dx, centerPos.y + dy };
+			if (IsInvalid(pos)) continue;
+			grids[pos.y][pos.x].erase(session);
+		}
+	}
+}
+
+// Helper: ì‹œì•¼ ì´ë™ ì‹œ ê²¹ì¹˜ì§€ ì•ŠëŠ” ë¶€ë¶„ë§Œ ì œê±°/ì¶”ê°€ (ìµœì í™”!)
+void World::UpdateVisionGrids(Session* session, GridPos oldPos, GridPos newPos, int visionRange)
+{
+	// 1. ìƒˆ ì‹œì•¼ì— ì—†ëŠ” ì´ì „ ê·¸ë¦¬ë“œì—ì„œ ì œê±°
+	for (int dy = -visionRange; dy <= visionRange; dy++)
+	{
+		for (int dx = -visionRange; dx <= visionRange; dx++)
+		{
+			GridPos oldGrid = { oldPos.x + dx, oldPos.y + dy };
+			if (IsInvalid(oldGrid)) continue;
+
+			// ìƒˆ ì‹œì•¼ ë²”ìœ„ ë°–ì´ë©´ ì œê±°
+			if (abs(oldGrid.x - newPos.x) > visionRange || abs(oldGrid.y - newPos.y) > visionRange)
 			{
-				if (other == session) continue;
-
-				// ¾ç¹æÇâ ½ºÆù
-				SendSpawn(other, session); // ÁÖº¯ »ç¶÷¿¡°Ô ³ª ¾Ë¸² 
-				SendSpawn(session, other); // ³ª¿¡°Ô ÁÖº¯ »ç¶÷ ¾Ë¸²
+				grids[oldGrid.y][oldGrid.x].erase(session);
 			}
 		}
 	}
 
-	// 4. ¼¼¼Ç »óÅÂ º¯°æ
-	// session->SetState(PlayerState::GAME);
+	// 2. ì´ì „ ì‹œì•¼ì— ì—†ë˜ ìƒˆ ê·¸ë¦¬ë“œì— ì¶”ê°€
+	for (int dy = -visionRange; dy <= visionRange; dy++)
+	{
+		for (int dx = -visionRange; dx <= visionRange; dx++)
+		{
+			GridPos newGrid = { newPos.x + dx, newPos.y + dy };
+			if (IsInvalid(newGrid)) continue;
+
+			// ì´ì „ ì‹œì•¼ ë²”ìœ„ ë°–ì´ë©´ ì¶”ê°€
+			if (abs(newGrid.x - oldPos.x) > visionRange || abs(newGrid.y - oldPos.y) > visionRange)
+			{
+				grids[newGrid.y][newGrid.x].insert(session);
+			}
+		}
+	}
+}
+
+void World::EnterGame(Session* session)
+{
+	// 0. Player ê°ì²´ ìƒì„± (ì•„ì§ ì—†ë‹¤ë©´)
+	if (session->GetPlayer() == nullptr)
+	{
+		Player* newPlayer = new Player(session);
+		session->SetPlayer(newPlayer);
+		std::cout << "[World] Player object created for ID " << session->GetPlayerId() << std::endl;
+	}
+
+	float startX = 500.0f;
+	float startY = 500.0f;
+	session->SetPos(startX, startY);
+
+	GridPos centerPos = GetGridPos(startX, startY);
+	int visionRange = 1;
+
+	// 1. ë‚´ ì‹œì•¼ 9ì¹¸ ëª¨ë‘ì— ë‚˜ë¥¼ ë“±ë¡
+	InsertToVisionGrids(session, centerPos, visionRange);
+
+	// 2. ë‚´ ì‹¤ì œ ìœ„ì¹˜ ê·¸ë¦¬ë“œì˜ í”Œë ˆì´ì–´ë“¤ê³¼ ìƒí˜¸ SPAWN
+	for (Session* other : grids[centerPos.y][centerPos.x])
+	{
+		if (other == session) continue;
+		SendSpawn(other, session);
+		SendSpawn(session, other);
+	}
+
+	sessions[session->GetPlayerId()] = session;
 
 	std::cout << "[World] Player " << session->GetPlayerId() << " -> Entered at (" << startX << ", " << startY << ")" << std::endl;
 }
@@ -51,7 +107,7 @@ void World::LeaveGame(Session* session)
 {
 	GridPos pos = GetGridPos(session->GetX(), session->GetY());
 
-	// 1. ÁÖº¯ »ç¶÷¿¡°Ô ³ª »ç¶óÁ³´Ù°í ¾Ë¸².
+	// 1. ï¿½Öºï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ù°ï¿½ ï¿½Ë¸ï¿½.
 	for (int dy=-2; dy<=2; dy++)
 	{
 		for (int dx = -2; dx <= 2; dx++)
@@ -67,7 +123,7 @@ void World::LeaveGame(Session* session)
 		}
 	}
 
-	// 2. ¿ùµå µ¥ÀÌÅÍ¿¡¼­ Á¦°Å
+	// 2. ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½Í¿ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½
 	grids[pos.y][pos.x].erase(session);
 	sessions.erase(session->GetPlayerId());
 
@@ -81,7 +137,7 @@ void World::HandleMove(Session* session, float x, float y)
 
 	session->SetPos(x, y);
 
-	// ½Ã¾ß Àç°è»ê
+	// ï¿½Ã¾ï¿½ ï¿½ï¿½ï¿½ï¿½
 	if (!(oldPos == newPos))
 	{
 		grids[oldPos.y][oldPos.x].erase(session);
@@ -91,14 +147,14 @@ void World::HandleMove(Session* session, float x, float y)
 	}
 	else
 	{
-		BroadcastMove(session); // ±×¸®µå ÀÌµ¿ ¾øÀ¸¸é ÁÖº¯ 9Ä­¿¡ MOVE Àü¼Û 
+		BroadcastMove(session); // ï¿½×¸ï¿½ï¿½ï¿½ ï¿½Ìµï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½Öºï¿½ 9Ä­ï¿½ï¿½ MOVE ï¿½ï¿½ï¿½ï¿½ 
 	}
 }
 
 void World::UpdateVision(Session* session, GridPos oldPos, GridPos newPos)
 {
-	// 1. ³ª¸¦ »õ·Î º¸°Ô µÈ »ç¶÷µé (ENTER)
-	// ÇöÀç 3x3¿¡¼­ ÀÌÀü 3x3¿¡ ¾ø´ø »ç¶÷ Ã£±â
+	// 1. ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ (ENTER)
+	// ï¿½ï¿½ï¿½ï¿½ 3x3ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ 3x3ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ Ã£ï¿½ï¿½
 	for (int dy=-1; dy<=1; dy++)
 	{
 		for (int dx=-1; dx<=1; dx++)
@@ -110,7 +166,7 @@ void World::UpdateVision(Session* session, GridPos oldPos, GridPos newPos)
 			{
 				if (other == session) continue;
 
-				// »õ·Î ¸¸³­ »ç¶÷
+				// ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½
 				if (abs(cur.x-oldPos.x) > 1 || abs(cur.y - oldPos.y) > 1)
 				{
 					SendSpawn(other, session);
@@ -124,7 +180,7 @@ void World::UpdateVision(Session* session, GridPos oldPos, GridPos newPos)
 		}
 	}
 
-	// Leave Ã³¸® - Hysterisis
+	// Leave Ã³ï¿½ï¿½ - Hysterisis
 	for (int dy=-1; dy <= 1; dy++)
 	{
 		for (int dx=-1; dx <= 1; dx++)
@@ -136,8 +192,8 @@ void World::UpdateVision(Session* session, GridPos oldPos, GridPos newPos)
 			{
 				if (other == session) continue;
 
-				// »õ·Î¿î À§Ä¡ ±âÁØ 5x5 ¹ÛÀ¸·Î ¸Ö¾îÁ³´Ù¸é LEAVE
-				// Grid Æ¯¼º »ó, °æ°è¼±¿¡¼­ ÇÃ·¹ÀÌ¾î°¡ µé¾î¿Ô´Ù ³ª°¨À» ¹İº¹ÇßÀ» ¶§ leave, enter°¡ ¹İº¹ ¹ß»ıÇÏ´Â °ÍÀ» ¹æÁö
+				// ï¿½ï¿½ï¿½Î¿ï¿½ ï¿½ï¿½Ä¡ ï¿½ï¿½ï¿½ï¿½ 5x5 ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½Ö¾ï¿½ï¿½ï¿½ï¿½Ù¸ï¿½ LEAVE
+				// Grid Æ¯ï¿½ï¿½ ï¿½ï¿½, ï¿½ï¿½è¼±ï¿½ï¿½ï¿½ï¿½ ï¿½Ã·ï¿½ï¿½Ì¾î°¡ ï¿½ï¿½ï¿½Ô´ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½İºï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ leave, enterï¿½ï¿½ ï¿½İºï¿½ ï¿½ß»ï¿½ï¿½Ï´ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½
 				if (abs(old.x - newPos.x) > 2 || abs(old.y - newPos.y) > 2)
 				{
 					SendDespawn(other, session);
