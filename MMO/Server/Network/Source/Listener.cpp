@@ -35,7 +35,7 @@ bool Listener::StartListen(int port, IocpCore* iocp, int backlog)
 	if (::bind(m_listenSocket, (SOCKADDR*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR) return false;
 
 	// 3. Listen 상태 진입
-	if (::listen(m_listenSocket, backlog) == SOCKET_ERROR) return false;
+	if (::listen(m_listenSocket, 0 /*backlog*/) == SOCKET_ERROR) return false;
 
 	// 4. [중요] AcceptEx 함수 주소 로드
 	GUID guidAcceptEx = WSAID_ACCEPTEX;
