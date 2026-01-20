@@ -213,3 +213,21 @@ void PacketHandler::Handle_C_ATTACK(Session* session, char* buffer)
     }
 }
 
+void PacketHandler::Handle_C_CHAT(Session* session, char* buffer)
+{
+    Player* player = session->GetPlayer();
+    if (player == nullptr) return;
+
+    std::cout << "[Chat] Player " << player->GetPlayerId() << ": " << buffer << std::endl;
+
+    S_CHAT res;
+    memset(&res, 0, sizeof(S_CHAT));
+    res.header.id = PKT_S_CHAT;
+    res.header.size = sizeof(S_CHAT);
+    res.playerId = player->GetPlayerId();
+
+    memcpy(res.chat, buffer, 128);
+
+    World::Get()->BroadcastPacketToObservers(session, (char*)&res, sizeof(S_CHAT)); 
+}
+

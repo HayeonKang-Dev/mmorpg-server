@@ -24,6 +24,8 @@ std::mutex g_listMutex; // ��� ��ȣ�� �ݰ� ����
 float myX = 500.0f;
 float myY = 500.0f;
 
+SOCKET g_clientSocket = INVALID_SOCKET;
+
 void ReceiveThread(SOCKET sock)
 {
     std::vector<char> buffer;
@@ -65,8 +67,8 @@ void ReceiveThread(SOCKET sock)
             else if (header->id == PKT_S_MOVE) {
                 S_MOVE* res = (S_MOVE*)buffer.data();
                 // �� �̵� �α״� ���� ������ ���� ������ �͸� ���
-                if (res->playerId != myPlayerId)
-                    std::cout << "[Move] Player " << res->playerId << " -> (" << res->x << ", " << res->y << ")" << std::endl;
+                //if (res->playerId != myPlayerId)
+                    //std::cout << "[Move] Player " << res->playerId << " -> (" << res->x << ", " << res->y << ")" << std::endl;
             }
             else if (header->id == PKT_S_ATTACK) {
                 S_ATTACK* res = (S_ATTACK*)buffer.data();
@@ -116,6 +118,12 @@ void ReceiveThread(SOCKET sock)
                 }
                 
             }
+            else if (header->id == PKT_S_CHAT)
+            {
+                S_CHAT* res = (S_CHAT*)buffer.data();
+                if (res->playerId == myPlayerId) std::cout << "[ME] : " << res->chat << std::endl;
+                else std::cout << "[Player " << res->playerId << "] : " << res->chat << std::endl;
+            }
 
             buffer.erase(buffer.begin(), buffer.begin() + header->size);
         }
@@ -123,9 +131,30 @@ void ReceiveThread(SOCKET sock)
 }
 
 
+// 입력 스레드
+void InputThread(SOCKET sock)
+{
+	while (true)
+	{
+        char msg[128];
+        std::cin.getline(msg, 128);
+
+        if (strlen(msg) > 0)
+        {
+            C_CHAT chatPkt;
+            chatPkt.header.id = PKT_C_CHAT;
+            chatPkt.header.size = sizeof(C_CHAT);
+            strncpy_s(chatPkt.chat, msg, _TRUNCATE);
+
+            send(sock, (char*)&chatPkt, sizeof(C_CHAT), 0); 
+        }
+	}
+}
+
 
 int main()
 {
+
     WSAData wsaData;
     WSAStartup(MAKEWORD(2, 2), &wsaData);
 
@@ -166,6 +195,9 @@ int main()
     // --- [�߿�] �α��� ��Ŷ ���� ���� ���� ������ ���� ---
     std::thread t(ReceiveThread, clientSocket);
     t.detach(); // ��׶��忡�� ���������� ����
+
+    std::thread t2(InputThread, clientSocket);
+    t2.detach(); 
 
     
 

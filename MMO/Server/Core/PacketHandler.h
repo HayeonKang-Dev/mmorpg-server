@@ -1,10 +1,11 @@
 #pragma once
 #include "Session.h"
 #include <iostream>
+
+#include "Player.h"
 #include "Protocol.h"
-
-
-
+#include "SessionManager.h"
+#include "World.h"
 
 
 class PacketHandler
@@ -36,7 +37,13 @@ public:
 		case PKT_C_ATTACK:
 			if (buffer != nullptr) Handle_C_ATTACK(session, buffer);
 			break;
+
+		case PKT_C_CHAT:
+			if (buffer != nullptr) Handle_C_CHAT(session, buffer);
+			break;
+
 		}
+		
 
 	}
 
@@ -52,6 +59,7 @@ private:
 
 	static void Handle_C_ATTACK(Session* session, char* buffer);
 
-	 
+	static void Handle_C_CHAT(Session* session, char* buffer);
+
 };
 

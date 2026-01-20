@@ -16,6 +16,8 @@ enum PacketID : uint16_t
     PKT_S_RESPAWN = 9,
     PKT_C_ATTACK = 10,
     PKT_S_ATTACK = 11,
+    PKT_C_CHAT = 12,
+    PKT_S_CHAT = 13,
 };
 
 #pragma pack(push, 1)
@@ -100,5 +102,17 @@ struct S_RESPAWN
     float y;
 };
 
+struct C_CHAT
+{
+    PacketHeader header;
+    char chat[128]; 
+};
+
+struct S_CHAT
+{
+    PacketHeader header;
+    int32_t playerId;
+    char chat[128]; 
+};
 
 #pragma pack(pop)
