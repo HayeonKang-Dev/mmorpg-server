@@ -26,7 +26,11 @@ public:
 	// 사용이 끝난 세션 다시 반남 (Disconnect 시 호출)
 	void Release(Session* session);
 
-
+	std::vector<Session*> GetSessions()
+	{
+		std::lock_guard<std::mutex> lock(m_mutex); 
+		return std::vector<Session*>(m_sessions.begin(), m_sessions.end()); 
+	}
 private:
 	SessionManager() {}; 
 	~SessionManager();

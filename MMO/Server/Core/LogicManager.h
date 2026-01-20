@@ -3,6 +3,7 @@
 #include <PacketHandler.h>
 #include <stack>
 
+#include "SessionManager.h"
 #include "World.h"
 
 struct Job
@@ -96,6 +97,26 @@ public:
 	{
 		m_stop = true;
 		cv.notify_all();
+	}
+
+	void CheckSessionTimeout()
+	{
+		uint64_t now = GetTickCount64();
+		const uint64_t timeoutLimit = 15000; // 15√ 
+
+		std::vector<Session*> sessions = SessionManager::Get()->GetSessions();
+
+		for (Session* session : sessions)
+		{
+			if (session->IsConnected() == false) continue;
+
+			if (now - session->GetLastTick() > timeoutLimit)
+			{
+				std::cout << "[Timeout] Kicking inactive Player: " << session->GetPlayerId() << std::endl;
+				
+				SessionManager::Get()->Release(session); 
+			}
+		}
 	}
 
 private:
