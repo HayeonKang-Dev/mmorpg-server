@@ -18,6 +18,7 @@ enum PacketID : uint16_t
     PKT_S_ATTACK = 11,
     PKT_C_CHAT = 12,
     PKT_S_CHAT = 13,
+    PKT_C_LOGOUT = 14,
 };
 
 #pragma pack(push, 1)
@@ -43,6 +44,11 @@ struct S_LOGIN
     int level;
     char name[32];
     int32_t playerId;
+};
+
+struct C_LOGOUT
+{
+    PacketHeader header;
 };
 
 struct C_MOVE

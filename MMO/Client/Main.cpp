@@ -151,9 +151,33 @@ void InputThread(SOCKET sock)
 	}
 }
 
+BOOL WINAPI ConsoleHandler(DWORD signal)
+{
+	if (signal == CTRL_C_EVENT || signal == CTRL_CLOSE_EVENT)
+	{
+        if (g_clientSocket != INVALID_SOCKET)
+        {
+	        std::cout << "\n[Terminating] Sending Logout Packet..." << std::endl;
+
+	        C_LOGOUT logoutPkt;
+	        logoutPkt.header.id = PKT_C_LOGOUT;
+	        logoutPkt.header.size = sizeof(C_LOGOUT);
+
+	        send(g_clientSocket, (char*)&logoutPkt, sizeof(C_LOGOUT), 0);
+
+            closesocket(g_clientSocket);
+        }
+        WSACleanup();
+        exit(0);
+	}
+    return TRUE; 
+}
+
 
 int main()
 {
+
+    SetConsoleCtrlHandler(ConsoleHandler, TRUE); 
 
     WSAData wsaData;
     WSAStartup(MAKEWORD(2, 2), &wsaData);
@@ -169,6 +193,9 @@ int main()
         std::cout << "Connect Error!" << std::endl;
         return 0;
     }
+
+    g_clientSocket = clientSocket; 
+
     std::cout << "Connected to Server!" << std::endl;
 
     // --- [1�ܰ�: �α��� �õ�] ---

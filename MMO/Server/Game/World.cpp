@@ -105,22 +105,26 @@ void World::EnterGame(Session* session)
 
 void World::LeaveGame(Session* session)
 {
-	GridPos pos = GetGridPos(session->GetX(), session->GetY());
-	int visionRange = 1;
+	if (session == nullptr || session->GetPlayer() == nullptr) return;
 
-	// 1. 내 실제 위치 그리드의 플레이어들에게 DESPAWN
-	for (Session* other : grids[pos.y][pos.x])
+	int32_t leavePlayerId = session->GetPlayerId();
+	GridPos pos = GetGridPos(session->GetX(), session->GetY());
+
 	{
-		if (other == session) continue;
-		SendDespawn(other, session);
+		std::lock_guard<std::mutex> lock(_gridMutex[pos.y][pos.x]);
+		for (Session* observer : grids[pos.y][pos.x])
+		{
+			if (observer == session) continue;
+			SendDespawn(observer, session); 
+		}
 	}
 
-	// 2. 내 시야 9칸에서 모두 제거
-	RemoveFromVisionGrids(session, pos, visionRange);
-
-	sessions.erase(session->GetPlayerId());
-
-	std::cout << "[World] Player " << session->GetPlayerId() << " Left Game" << std::endl;
+	RemoveFromVisionGrids(session, pos, VISION_RANGE);
+	{
+		std::lock_guard<std::mutex> lock(m_mutex);
+		sessions.erase(leavePlayerId); 
+	}
+	std::cout << "[World] Player " << leavePlayerId << " Leave Success." << std::endl;
 }
 
 void World::HandleMove(Session* session, float x, float y)

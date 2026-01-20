@@ -42,6 +42,9 @@ public:
 			if (buffer != nullptr) Handle_C_CHAT(session, buffer);
 			break;
 
+		case PKT_C_LOGOUT:
+			if (buffer != nullptr) Handle_C_LOGOUT(session, buffer);
+			break; 
 		}
 		
 
@@ -61,5 +64,6 @@ private:
 
 	static void Handle_C_CHAT(Session* session, char* buffer);
 
+	static void Handle_C_LOGOUT(Session* session, char* buffer);
 };
 

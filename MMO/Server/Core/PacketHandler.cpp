@@ -231,3 +231,13 @@ void PacketHandler::Handle_C_CHAT(Session* session, char* buffer)
     World::Get()->BroadcastPacketToObservers(session, (char*)&res, sizeof(S_CHAT)); 
 }
 
+void PacketHandler::Handle_C_LOGOUT(Session* session, char* buffer)
+{
+	Player* player = session->GetPlayer();
+	if (player == nullptr) return;
+
+	std::cout << "[Logout] Player : " << player->GetPlayerId() << " requested logout" << std::endl;
+	World::Get()->LeaveGame(session);
+	SessionManager::Get()->Release(session); 
+}
+
