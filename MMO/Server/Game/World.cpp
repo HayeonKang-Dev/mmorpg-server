@@ -260,3 +260,20 @@ Session* World::FindSession(int32_t playerId)
 	return it->second;
 }
 
+void World::LogAllPlayersAOI()
+{
+	for (auto& [id, session] : sessions)
+	{
+		GridPos pos = GetGridPos(session->GetX(), session->GetY());
+
+		std::vector<int32_t> nearbyIds;
+		for (Session* other : grids[pos.y][pos.x])
+		{
+			if (other != session)
+				nearbyIds.push_back(other->GetPlayerId());
+		}
+
+		_aoiLogger.LogPlayerAOI(id, session->GetX(), session->GetY(), nearbyIds);
+	}
+}
+
