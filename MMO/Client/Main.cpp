@@ -174,10 +174,10 @@ BOOL WINAPI ConsoleHandler(DWORD signal)
 }
 
 
-int main()
+int main(int argc, char* argv[])
 {
 
-    SetConsoleCtrlHandler(ConsoleHandler, TRUE); 
+    SetConsoleCtrlHandler(ConsoleHandler, TRUE);
 
     WSAData wsaData;
     WSAStartup(MAKEWORD(2, 2), &wsaData);
@@ -186,7 +186,7 @@ int main()
 
     SOCKADDR_IN serverAddr = {};
     serverAddr.sin_family = AF_INET;
-    serverAddr.sin_port = htons(8001); // ���� ��Ʈ�� �´��� Ȯ���ϼ���!
+    serverAddr.sin_port = htons(8001);
     inet_pton(AF_INET, "127.0.0.1", &serverAddr.sin_addr);
 
     if (connect(clientSocket, (SOCKADDR*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR) {
@@ -194,16 +194,29 @@ int main()
         return 0;
     }
 
-    g_clientSocket = clientSocket; 
+    g_clientSocket = clientSocket;
 
     std::cout << "Connected to Server!" << std::endl;
 
-    // --- [1�ܰ�: �α��� �õ�] ---
+    // --- Login ---
     char inputId[32], inputPw[32];
-    std::cout << "Enter User ID: ";
-    std::cin >> inputId;
-    std::cout << "Enter Password: ";
-    std::cin >> inputPw;
+
+    if (argc >= 2)
+    {
+        // Auto login mode: Client.exe <number>
+        // Example: Client.exe 1 -> ID: Test_1, PW: test123
+        snprintf(inputId, 32, "Test_%s", argv[1]);
+        strncpy_s(inputPw, "test123", _TRUNCATE);
+        std::cout << "[Auto Login] ID: " << inputId << std::endl;
+    }
+    else
+    {
+        // Manual login mode
+        std::cout << "Enter User ID: ";
+        std::cin >> inputId;
+        std::cout << "Enter Password: ";
+        std::cin >> inputPw;
+    }
 
     C_LOGIN loginPkt;
     loginPkt.header.id = PKT_C_LOGIN;
@@ -211,7 +224,6 @@ int main()
 
     memset(loginPkt.userId, 0, 32);
     memset(loginPkt.userPw, 0, 32);
-    // std::string ��� ���� char �迭�� �����մϴ�.
     strncpy_s(loginPkt.userId, inputId, _TRUNCATE);
     strncpy_s(loginPkt.userPw, inputPw, _TRUNCATE);
 
