@@ -9,11 +9,11 @@
 
 IocpCore::IocpCore()
 {
-	// 1. IOCP Ä¿³Î °´Ã¼ »ı¼º
+	// 1. IOCP ì»¤ë„ ê°ì²´ ìƒì„±
 	m_iocpHandle = ::CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 0);
 	if (m_iocpHandle == INVALID_HANDLE_VALUE)
 	{
-		// ¿¡·¯ Ã³¸® 
+		// ì—ëŸ¬ ì²˜ë¦¬
 	}
 }
 
@@ -28,10 +28,10 @@ IocpCore::~IocpCore()
 
 bool IocpCore::Register(SOCKET socket, ULONG_PTR completionKey)
 {
-	// 2. ±âÁ¸ IOCP ÇÚµé¿¡ ¼ÒÄÏ ¿¬°á
-	// ¼¼ ¹øÂ° ÀÎÀÚÀÎ completionKey´Â ³ªÁß¿¡ ¿Ï·áÅëÁö ¹ŞÀ» ¶§ ¾î¶² ¼¼¼ÇÀÎÁö ±¸ºĞÇÏ´Â ¿ëµµ
-	HANDLE h = ::CreateIoCompletionPort((HANDLE)socket, m_iocpHandle, completionKey, 0); 
-	return (h != NULL); 
+	// 2. í•´ë‹¹ IOCP í•¸ë“¤ì— ì†Œì¼“ ë“±ë¡
+	// ì„¸ ë²ˆì§¸ ì¸ìì¸ completionKeyëŠ” ë‚˜ì¤‘ì— ì™„ë£Œí†µì§€ ë°›ì„ ë•Œ ì–´ë–¤ ì„¸ì…˜ì¸ì§€ êµ¬ë¶„í•˜ëŠ” ìš©ë„
+	HANDLE h = ::CreateIoCompletionPort((HANDLE)socket, m_iocpHandle, completionKey, 0);
+	return (h != NULL);
 }
 
 bool IocpCore::Dispatch(uint32_t timeoutMs)
@@ -40,38 +40,31 @@ bool IocpCore::Dispatch(uint32_t timeoutMs)
 	ULONG_PTR completionKey = 0;
 	LPOVERLAPPED overlapped = nullptr;
 
-	// 1. ¿î¿µÃ¼Á¦°¡ ¿Ï·á º¸°í¼­ ´øÁú ¶§±îÁö ´ë±â
+	// 1. ìš´ì˜ì²´ì œê°€ ì™„ë£Œ ì‹ í˜¸ë¥¼ ì¤„ë•Œê¹Œì§€ ëŒ€ê¸°
 	if (::GetQueuedCompletionStatus(m_iocpHandle, &bytesTransferred,
 		&completionKey, &overlapped, timeoutMs))
 	{
-		// [ÄÉÀÌ½º A] ¸®½¼ ¼ÒÄÏ¿¡¼­ Á¢¼Ó(Accept)ÀÌ ¿Ï·áµÈ °æ¿ì
+		// [ì¼€ì´ìŠ¤ A] ë¦¬ìŠ¨ ì†Œì¼“ì—ì„œ ì—°ê²°(Accept)ì´ ì™„ë£Œëœ ê²½ìš°
 		if (completionKey == 0)
 		{
-			// overlapped ÁÖ¼Ò¸¦ ÀÌ¿ëÇØ Session °´Ã¼ÀÇ ÁÖ¼Ò¸¦ Ã£¾Æ³À´Ï´Ù.
-			// Session Å¬·¡½ºÀÇ m_acceptOverlapped ¸â¹ö º¯¼ö À§Ä¡¸¦ ±âÁØÀ¸·Î ¿ª»êÇÕ´Ï´Ù.
+			// overlapped ì£¼ì†Œë¥¼ ì´ìš©í•´ Session ê°ì²´ì˜ ì£¼ì†Œ íƒìƒ‰
 			Session* session = CONTAINING_RECORD(overlapped, Session, m_acceptOverlapped);
 
-			std::cout << "Accept ¿Ï·á ½ÅÈ£ °¨Áö! ÀÌÁ¦ µ¥ÀÌÅÍ¸¦ ¹ŞÀ» ÁØºñ¸¦ ÇÕ´Ï´Ù." << std::endl;
+			std::cout << "Accept Complete! Ready to receive data." << std::endl;
 
-			// Á¢¼ÓÀÌ µÇ¾úÀ¸´Ï ¸®½¼ ¼ÒÄÏÀÇ Æ¯¼ºÀ» Å¬¶ó ¼ÒÄÏ¿¡ ÀÔÈ÷°í (ÇÊ¿ä ½Ã)
-			// ½ÇÁ¦·Î µ¥ÀÌÅÍ¸¦ ¹ŞÀ» ¼ö ÀÖµµ·Ï ±×¹°À» ´øÁı´Ï´Ù.
+			// [ìˆ˜ì •] ì—°ê²° ì™„ë£Œ ì‹œ ìƒíƒœë¥¼ CONNECTEDë¡œ ì„¤ì • (CCU ì¹´ìš´íŠ¸ìš©)
+			session->SetState(PlayerState::CONNECTED);
+			session->UpdateLastTick();
+
+			// ì—°ê²°ì´ ë˜ì—ˆìœ¼ë‹ˆ ë°ì´í„°ë¥¼ ë°›ì„ ìˆ˜ ìˆë„ë¡ ì¤€ë¹„
 			session->RegisterRecv();
 
-			// AcceptEx Ã¤¿öÁÖ±â
-			Session* newSession = SessionManager::Get()->Acquire();
-			if (newSession == nullptr)
-			{
-				std::cout << "[Warning] ¼¼¼Ç Ç® °í°¥! Á¢¼Ó °ÅºÎ" << std::endl; 
-			}
-			if (newSession && m_listener)
-			{
-				m_listener->RegisterAccept(newSession, this); 
-			}
+			// í´ë¼ì´ì–¸íŠ¸ ì—°ê²° ì¢…ë£Œ ì‹œì—ë§Œ í•´ë‹¹ ì„¸ì…˜ì„ ë°˜í™˜í•˜ê³  ë‹¤ì‹œ AcceptEx ê±¸ê¸°
 
 			return true;
 		}
 
-		// [ÄÉÀÌ½º B] ÀÏ¹İ ¼¼¼Ç¿¡¼­ µ¥ÀÌÅÍ(Recv/Send)°¡ ¿Â °æ¿ì
+		// [ì¼€ì´ìŠ¤ B] ì¼ë°˜ ì„¸ì…˜ì—ì„œ ë°ì´í„°(Recv/Send)ê°€ ì˜¨ ê²½ìš°
 		Session* session = reinterpret_cast<Session*>(completionKey);
 		if (session == nullptr) return true;
 
@@ -79,51 +72,52 @@ bool IocpCore::Dispatch(uint32_t timeoutMs)
 		{
 			if (overlapped == session->GetRecvOverlapped())
 			{
-				// µ¥ÀÌÅÍ°¡ µé¾î¿È -> ·Î±× Ãâ·Â ¹× ·ÎÁ÷ Ã³¸®
-				std::cout << "µ¥ÀÌÅÍ ¼ö½Å ¿Ï·á! ¹ÙÀÌÆ®: " << bytesTransferred << std::endl;
+				// ë°ì´í„°ê°€ ë„ì°© -> ë¡œê¹… í›„ íŒ¨í‚· ì²˜ë¦¬
+				std::cout << "Data Recv Complete! Bytes: " << bytesTransferred << std::endl;
 				session->OnRecv(bytesTransferred);
 			}
 			else if (overlapped == session->GetSendOverlapped())
 			{
-				std::cout << "µ¥ÀÌÅÍ ¼Û½Å ¿Ï·á! ¹ÙÀÌÆ®: " << bytesTransferred << std::endl;
-				session->OnSend(bytesTransferred); 
+				std::cout << "Data Send Complete! Bytes: " << bytesTransferred << std::endl;
+				session->OnSend(bytesTransferred);
 			}
-			
+
 		}
 		else
 		{
-			// [¼¼¼Ç È¸¼ö ·ÎÁ÷] Å¬¶óÀÌ¾ğÆ®°¡ Á¢¼ÓÀ» ²÷¾ú°Å³ª(0 byte), ¿¡·¯ ¹ß»ı
+			// [ì—°ê²° ì¢…ë£Œ] í´ë¼ì´ì–¸íŠ¸ê°€ ì—°ê²°ì„ ëŠê±°ë‚˜(0 byte), ì—ëŸ¬ ë°œìƒ
 			std::cout << "Client Disconnected. Releasing Session..." << std::endl;
 
-			// ¼¼¼Ç Á¤¸® ·ÎÁ÷ (session->Close() µî) È£Ãâ ÇÊ¿ä
-			// 1. ¼¼¼ÇÀÇ ¼ÒÄÏ ´İ°í ³»ºÎ ¹öÆÛ ºñ¿ì±â
-			session->Clear(); 
-
-			// 2. ¼¼¼Ç ¸Å´ÏÀúÀÇ freeSessions Å¥·Î µ¹·Áº¸³»±â
+			// [ìˆ˜ì •] Release() ë‚´ë¶€ì—ì„œ Clear()ë¥¼ í˜¸ì¶œí•˜ë¯€ë¡œ ì—¬ê¸°ì„œ ì¤‘ë³µ í˜¸ì¶œ ì œê±°
+			// SessionManager::Release()ê°€ Clear() + í’€ ë°˜í™˜ì„ ëª¨ë‘ ì²˜ë¦¬í•¨
 			SessionManager::Get()->Release(session);
 
-			// 3. (opt) ºó ÀÚ¸® »ı°åÀ¸´Ï ´Ù½Ã »õ·Î¿î Á¢¼Ó ¹ŞÀ» ¼ö ÀÖ°Ô
-			// ¸®½º³Ê¿¡ RegisterAccept¸¦ ÇÑ ¹ø ´õ È£ÃâÇØ ÁÙ ¼öµµ ÀÖÀ½
+			// [ìˆ˜ì •] ì„¸ì…˜ì´ ë°˜í™˜ë˜ì—ˆìœ¼ë¯€ë¡œ ë‹¤ì‹œ AcceptExë¥¼ ê±¸ì–´ì¤Œ
+			// ê°™ì€ ì„¸ì…˜ì„ ì¬ì‚¬ìš©í•˜ë¯€ë¡œ ìƒˆë¡œ Acquireí•  í•„ìš” ì—†ìŒ
 			if (m_listener)
 			{
-				Session* newSession = SessionManager::Get()->Acquire();
-				if (newSession) m_listener->RegisterAccept(newSession, this); 
+				m_listener->RegisterAccept(session, this);
 			}
-			
 		}
 
 		return true;
 	}
 	else
 	{
-		// GQCS ÀÚÃ¼°¡ ½ÇÆĞ
+		// GQCS ìì²´ê°€ ì‹¤íŒ¨
 		if (overlapped != nullptr)
 		{
 			Session* session = reinterpret_cast<Session*>(completionKey);
-			session->Clear();
-			SessionManager::Get()->Release(session); 
-		};
+			// [ìˆ˜ì •] Release() ë‚´ë¶€ì—ì„œ Clear()ë¥¼ í˜¸ì¶œí•˜ë¯€ë¡œ ì¤‘ë³µ ì œê±°
+			SessionManager::Get()->Release(session);
+
+			// AcceptEx ìŠ¬ë¡¯ ë³µêµ¬
+			if (m_listener)
+			{
+				m_listener->RegisterAccept(session, this);
+			}
+		}
 	}
+
+	return true;
 }
-
-
