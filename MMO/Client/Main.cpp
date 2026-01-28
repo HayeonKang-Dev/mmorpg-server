@@ -250,15 +250,18 @@ int main(int argc, char* argv[])
         movePkt.header.size = sizeof(C_MOVE);
         movePkt.header.id = PKT_C_MOVE;
 
-        // 1. �̵� ��ǥ ���� ��� (������ �� ����)
-        myX += (static_cast<float>(rand() % 10 - 5));
-        myY += (static_cast<float>(rand() % 10 - 5));
+        // 1. 이동 좌표 랜덤 생성 (그리드 크기 100 고려, ±50 범위)
+        myX += (static_cast<float>(rand() % 100 - 50));
+        myY += (static_cast<float>(rand() % 100 - 50));
+
+        // 맵 경계 체크 (0 ~ 999)
+        if (myX < 0) myX = 0;
+        if (myX > 999) myX = 999;
+        if (myY < 0) myY = 0;
+        if (myY > 999) myY = 999;
 
         movePkt.x = myX;
         movePkt.y = myY;
-
-        // Y��ǥ ������ �� ����
-        if (abs(movePkt.y) < 0.01f) movePkt.y = 0.0f;
 
         send(clientSocket, (char*)&movePkt, sizeof(C_MOVE), 0);
 
