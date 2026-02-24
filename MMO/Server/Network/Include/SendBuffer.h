@@ -13,6 +13,9 @@ public:
 
 	int32_t Size() { return m_size; }
 
+	// ì‹¤ì œ í• ë‹¹ëœ ë²„í¼ ìš©ëŸ‰ (í’€ ë°˜í™˜ ì—¬ë¶€ íŒë‹¨ìš©)
+	int32_t Capacity() const { return (int32_t)m_buffer.size(); }
+
 	void Close(int32_t size) { m_size = size;  }
 
 
@@ -31,7 +34,6 @@ public:
 		std::lock_guard<std::mutex> lock(m_lock);
 		for (int i=0; i<count; i++)
 		{
-			// ÆĞÅ¶ ÃÖ´ë »çÀÌÁî°¡ 4096ÀÌ´Ï±î 8192·Î ¿©À¯ ÀÖ°Ô ÇÒ´ç
 			m_pool.push_back(new SendBuffer(8192)); 
 		}
 	}
@@ -43,8 +45,8 @@ public:
 		std::lock_guard<std::mutex> lock(m_lock);
 		if (m_pool.empty())
 		{
-			// Ç®ÀÌ ¸ğÀÚ¶ó¸é ÀÌ¶§¸¸ »õ·Î »ı¼º (·±Å¸ÀÓ ÇÒ´ç ÃÖ¼ÒÈ­) 
-			return new SendBuffer(8192); 
+			// í’€ ì†Œì§„ ì‹œ: ì‹¤ì œ íŒ¨í‚· í¬ê¸°ë§Œí¼ë§Œ í• ë‹¹ (8192 ê³ ì • â†’ ë‚­ë¹„ ì œê±°)
+			return new SendBuffer(size);
 		}
 		SendBuffer* buffer = m_pool.back();
 		m_pool.pop_back();
@@ -55,8 +57,14 @@ public:
 	{
 		std::lock_guard<std::mutex> lock(m_lock);
 
-		// ´Ù ½èÀ¸¸é Áö¿ìÁö ¸»°í ´Ù½Ã Ç®¿¡ ³Ö±â 
-		m_pool.push_back(buffer); 
+		// í‘œì¤€ í¬ê¸°(8192) ë²„í¼ë§Œ í’€ì— ë°˜í™˜
+		// ì†Œí˜• overflow ë²„í¼ë¥¼ í’€ì— ë„£ìœ¼ë©´ ë‚˜ì¤‘ì— ë” í° íŒ¨í‚·ì´ ì¬ì‚¬ìš© ì‹œ ë²„í¼ ì˜¤ë²„í”Œë¡œìš° ìœ„í—˜
+		if (buffer->Capacity() < 8192 || m_pool.size() >= 10000)
+		{
+			delete buffer;
+			return;
+		}
+		m_pool.push_back(buffer);
 	}
 
 private:
