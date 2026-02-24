@@ -15,39 +15,39 @@ int main()
 	if (::WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) return 0;
 
 
-	// 1. ¼¼¼Ç ¸Å´ÏÀú ÃÊ±âÈ­ (100°³ Ç®¸µ)
+	// 1. ï¿½ï¿½ï¿½ï¿½ ï¿½Å´ï¿½ï¿½ï¿½ ï¿½Ê±ï¿½È­ (100ï¿½ï¿½ Ç®ï¿½ï¿½)
 	SessionManager::Get()->Init(100);
 
-	// SendBuffer Ç® ÃÊ±âÈ­ 
+	// SendBuffer Ç® ï¿½Ê±ï¿½È­ 
 	SendBufferManager::Get()->Init(200);
 
-	// 2. DB ¸Å´ÏÀú ÃÊ±âÈ­
+	// 2. DB ï¿½Å´ï¿½ï¿½ï¿½ ï¿½Ê±ï¿½È­
 	if (DBManager::Get()->Init(2, "tcp://127.0.0.1:3306", "root", "sotptkd", "mmo_db"))
 	{
-		std::cout << "DB ½º·¹µå Ç® °¡µ¿ ¼º°ø" << std::endl;
+		std::cout << "DB ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ Ç® ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½" << std::endl;
 	}
 
-	// 3. IOCP ÄÚ¾î ¹× ¸®½º³Ê »ý¼º
+	// 3. IOCP ï¿½Ú¾ï¿½ ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½
 	IocpCore iocp;
 	Listener listener;
 	iocp.SetListener(&listener);
 
 	if (listener.StartListen(8001, &iocp) == false)
 	{
-		std::cout << "Listen ½ÇÆÐ!" << std::endl;
+		std::cout << "Listen ï¿½ï¿½ï¿½ï¿½!" << std::endl;
 		return 0;
 	}
 
-	// 4. ¹Ì¸® AcceptEx 10°³ °É¾îµÎ±â
+	// 4. ï¿½Ì¸ï¿½ AcceptEx 10ï¿½ï¿½ ï¿½É¾ï¿½Î±ï¿½
 	for (int i=0; i<10; i++)
 	{
 		Session* session = SessionManager::Get()->Acquire();
 
-		// iocp¸¦ °°ÀÌ ³Ñ°Ü¼­ Listener ³»ºÎ¿¡¼­ ¼ÒÄÏ »ý¼º-µî·Ï-AcceptEx ÇÑ¹ø¿¡ ÀÏ¾î³ª°Ô ÇÔ 
+		// iocpï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½Ñ°Ü¼ï¿½ Listener ï¿½ï¿½ï¿½Î¿ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½-ï¿½ï¿½ï¿½-AcceptEx ï¿½Ñ¹ï¿½ï¿½ï¿½ ï¿½Ï¾î³ªï¿½ï¿½ ï¿½ï¿½ 
 		listener.RegisterAccept(session, &iocp); 
 	}
 
-	// 5. ¿öÄ¿ ½º·¹µå 4°³ °¡µ¿
+	// 5. ï¿½ï¿½Ä¿ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ 4ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½
 	std::vector<std::thread> workers;
 	for (int i=0; i<4; i++)
 	{
@@ -60,17 +60,19 @@ int main()
 		})); 
 	}
 
-	// 6. Logic Thread °¡µ¿
-	std::thread logicThread([]() {LogicManager::Get()->Update(); });
-	logicThread.detach();
+	// 6. Logic Thread x4 (session affinity-based)
+	for (int i = 0; i < LogicManager::THREAD_COUNT; i++)
+	{
+		std::thread t([i]() { LogicManager::Get()->Update(i); });
+		t.detach();
+	}
 
-	std::cout << "Server Started on Port 8000..." << std::endl;
+	std::cout << "Server Started on Port 8001..." << std::endl;
 
-	// DB°¡ ¿¬°áµÉ ½Ã°£ (Å×½ºÆ®¿ë)
+	// DBì™€ ì—°ê²°í•  ì‹œê°„ (í…ŒìŠ¤íŠ¸ìš©)
 	std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
 	
-
 
 	for (auto& t : workers) t.join(); 
 

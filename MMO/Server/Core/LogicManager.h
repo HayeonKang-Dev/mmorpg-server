@@ -55,34 +55,35 @@ public:
 	// 모니터링용 접근자
 	ServerMonitor* GetMonitor() { return &m_monitor; }
 
-	// IO 스레드에서 호출하는 함수
+	// Route job to fixed thread by session pointer hash (affinity)
+	// Same session -> same thread -> no per-session race condition
 	void PushJob(Job* job)
 	{
-		std::lock_guard<std::mutex> lock(m_mutex);
-		jobs.push(job); // 복사없이 포인터 전달
-		cv.notify_one();
+		int idx = (int)(((uintptr_t)job->session >> 6) % THREAD_COUNT);
+		std::lock_guard<std::mutex> lock(m_mutex[idx]);
+		m_jobs[idx].push(job);
+		m_cv[idx].notify_one();
 	}
 
-	// ���� ������ �ϳ��� ȣ��
-	void Update()
+	// Each logic thread calls Update(threadIdx)
+	void Update(int threadIdx)
 	{
 		while (1)
 		{
 			std::vector<Job*> currJobs;
 			{
-				std::unique_lock<std::mutex> lock(m_mutex);
-
-				cv.wait_for(lock, std::chrono::milliseconds(100), [this]
+				std::unique_lock<std::mutex> lock(m_mutex[threadIdx]);
+				m_cv[threadIdx].wait_for(lock, std::chrono::milliseconds(100), [this, threadIdx]
 					{
-						return !jobs.empty() || m_stop;
+						return !m_jobs[threadIdx].empty() || m_stop;
 					});
 
-				if (m_stop && jobs.empty()) break;
+				if (m_stop && m_jobs[threadIdx].empty()) break;
 
-				while (!jobs.empty())
+				while (!m_jobs[threadIdx].empty())
 				{
-					currJobs.push_back(jobs.front());
-					jobs.pop(); 
+					currJobs.push_back(m_jobs[threadIdx].front());
+					m_jobs[threadIdx].pop();
 				}
 			}
 
