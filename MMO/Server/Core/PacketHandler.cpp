@@ -158,58 +158,97 @@ void PacketHandler::Handle_S_LOGIN(Session* session, char* buffer)
 
 void PacketHandler::Handle_C_ATTACK(Session* session, char* buffer)
 {
-    C_ATTACK* pkt = reinterpret_cast<C_ATTACK*>(buffer);
+    // buffer는 페이로드만 포함 (헤더 제외): [int32_t attackType][int32_t targetId]
+    int32_t attackType = *reinterpret_cast<int32_t*>(buffer);
+    int32_t targetId = *reinterpret_cast<int32_t*>(buffer + sizeof(int32_t));
+
     Player* attacker = session->GetPlayer();
     if (attacker == nullptr || attacker->m_Hp <= 0) return;
 
-    if (pkt->attackType == 0)
+    if (attackType == 0)
     {
-        Session* targetSession = World::Get()->FindSession(pkt->targetId);
-        if (targetSession)
+        // Step 1: grid 구조 접근 (짧게) - 타겟 포인터 획득
+        Session* targetSession = nullptr;
+        float dist = 0.0f;
         {
-            float dist = World::CalculateDistance(session, targetSession);
-            if (dist <= ATTACK_RANGE_MEL)
-            {
-	            Player* target = targetSession->GetPlayer();
-				target->OnDamaged(10, attacker);
+            std::lock_guard<std::recursive_mutex> lock(g_worldMutex);
+            targetSession = World::Get()->FindSession(targetId);
+            if (targetSession == nullptr) return;
+            dist = World::CalculateDistance(session, targetSession);
+        }
 
+        if (dist > ATTACK_RANGE_MEL) return;
+
+        // Step 2: 타겟 HP 수정 - 플레이어 개별 락
+        bool attacked = false;
+        {
+            Player* target = targetSession->GetPlayer();
+            if (target == nullptr) return;
+
+            std::lock_guard<std::mutex> pLock(target->m_mutex);
+
+            // 락 획득 후 nullptr 재확인 (락 대기 중 세션 disconnect 가능)
+            target = targetSession->GetPlayer();
+            if (target == nullptr) return;
+
+            target->OnDamaged(10, attacker);
+            attacked = true;
+        }
+
+        // Step 3: 브로드캐스트 (모든 락 바깥에서)
+        if (attacked)
+        {
+            S_ATTACK res;
+            res.header = { sizeof(S_ATTACK), PKT_S_ATTACK };
+            res.attackerId = attacker->GetPlayerId();
+            res.targetId = targetId;
+            World::Get()->BroadcastPacketToObservers(session, (char*)&res, sizeof(res));
+        }
+    }
+    else if (attackType == 1)
+    {
+        // Step 1: 타겟 목록 snapshot (gridMutex 짧게 보유)
+        std::vector<Session*> targets;
+        {
+            std::lock_guard<std::recursive_mutex> lock(g_worldMutex);
+            GridPos pos = World::Get()->GetGridPos(session->GetX(), session->GetY());
+            for (Session* other : World::Get()->GetGrids()[pos.y][pos.x])
+            {
+                if (other == session) continue;
+                float dist = World::CalculateDistance(session, other);
+                if (dist <= ATTACK_RANGE_RADIAL)
+                    targets.push_back(other);
+            }
+        }
+
+        // Step 2: 각 타겟별 개별 락으로 HP 수정
+        for (Session* targetSess : targets)
+        {
+            Player* target = targetSess->GetPlayer();
+            if (target == nullptr) continue;
+
+            bool attacked = false;
+            {
+                std::lock_guard<std::mutex> pLock(target->m_mutex);
+
+                // 락 대기 중 disconnect 가능 → nullptr 재확인
+                target = targetSess->GetPlayer();
+                if (target == nullptr) continue;
+
+                target->OnDamaged(20, attacker);
+                attacked = true;
+            }
+
+            // Step 3: 브로드캐스트 (락 바깥에서)
+            if (attacked)
+            {
                 S_ATTACK res;
                 res.header = { sizeof(S_ATTACK), PKT_S_ATTACK };
                 res.attackerId = attacker->GetPlayerId();
-                res.targetId = target->GetPlayerId();
-
+                res.targetId = targetSess->GetPlayerId();
                 World::Get()->BroadcastPacketToObservers(session, (char*)&res, sizeof(res));
-                std::cout << "[Combat] Player " << res.attackerId << " attacks Player " << res.targetId << std::endl;
-                
             }
-            
         }
-    }
-    else if (pkt->attackType == 1)
-    {
-        std::cout << "[Combat] Player " << attacker->GetPlayerId() << " uses RAIDAL Attack!" << std::endl;
-        GridPos pos = World::Get()->GetGridPos(session->GetX(), session->GetY());
-        
-		for (Session* other : World::Get()->GetGrids()[pos.y][pos.x])
-		{
-            if (other == session) continue;
-            float dist = World::CalculateDistance(session, other);
-            if (dist <= ATTACK_RANGE_RADIAL)
-            {
-                if (other->GetPlayer() != nullptr)
-                {
-	                other->GetPlayer()->OnDamaged(20, attacker);
-
-	                S_ATTACK res;
-	                res.header = { sizeof(S_ATTACK), PKT_S_ATTACK };
-	                res.attackerId = attacker->GetPlayerId();
-	                res.targetId = other->GetPlayerId();
-
-	                World::Get()->BroadcastPacketToObservers(session, (char*)&res, sizeof(res)); 
-                }
-                
-            }
-		}
     }
 }
 
