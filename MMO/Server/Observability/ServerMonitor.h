@@ -6,8 +6,11 @@
 #include <iomanip>
 #include <chrono>
 #include <atomic>
+#include <vector>
 #include <windows.h>
 #include <psapi.h>
+
+static const int MAX_IOCP_WORKERS = 4;
 
 class ServerMonitor {
 private:
@@ -21,6 +24,11 @@ private:
     ULARGE_INTEGER _lastKernel{};
     ULARGE_INTEGER _lastUser{};
     uint64_t _lastCpuTime = 0;
+
+    // 스레드별 작업량 카운터
+    std::atomic<uint32_t> _iocpCount[MAX_IOCP_WORKERS]{};
+    std::atomic<uint32_t> _logicCount{ 0 };
+    std::atomic<uint32_t> _dbCount{ 0 };
 
     // 사용 가능한 파일명 찾기 (중복 시 번호 붙이기)
     std::string FindAvailableFilename(const std::string& baseName) {
@@ -48,7 +56,7 @@ public:
         _file << std::unitbuf; // 자동 flush
 
         // 새 파일이므로 헤더 작성
-        _file << "Timestamp,CCU,Recv_PPS,Send_PPS,Memory_MB,CPU_Percent\n";
+        _file << "Timestamp,CCU,Recv_PPS,Send_PPS,Memory_MB,CPU_Percent,IOCP_0,IOCP_1,IOCP_2,IOCP_3,Logic_Jobs,DB_Queries\n";
 
         std::cout << "[Monitor] Log file: " << _filename << std::endl;
 
@@ -61,6 +69,9 @@ public:
 
     void AddRecvCount() { _recvCount.fetch_add(1, std::memory_order_relaxed); }
     void AddSendCount() { _sendCount.fetch_add(1, std::memory_order_relaxed); }
+    void AddWorkerCount(int idx) { if (idx >= 0 && idx < MAX_IOCP_WORKERS) _iocpCount[idx].fetch_add(1, std::memory_order_relaxed); }
+    void AddLogicCount() { _logicCount.fetch_add(1, std::memory_order_relaxed); }
+    void AddDbCount() { _dbCount.fetch_add(1, std::memory_order_relaxed); }
 
     void Update(int32_t currentCCU) {
         uint64_t now = GetTickCount64();
@@ -69,12 +80,20 @@ public:
             uint32_t recv = _recvCount.exchange(0, std::memory_order_relaxed);
             uint32_t send = _sendCount.exchange(0, std::memory_order_relaxed);
 
+            uint32_t iocp[MAX_IOCP_WORKERS];
+            for (int i = 0; i < MAX_IOCP_WORKERS; i++)
+                iocp[i] = _iocpCount[i].exchange(0, std::memory_order_relaxed);
+            uint32_t logic = _logicCount.exchange(0, std::memory_order_relaxed);
+            uint32_t db = _dbCount.exchange(0, std::memory_order_relaxed);
+
             _file << GetTimestamp() << ","
                 << currentCCU << ","
                 << recv << ","
                 << send << ","
                 << std::fixed << std::setprecision(2) << GetMemoryUsageMB() << ","
-                << std::fixed << std::setprecision(1) << GetProcessCPU() << "\n";
+                << std::fixed << std::setprecision(1) << GetProcessCPU() << ","
+                << iocp[0] << "," << iocp[1] << "," << iocp[2] << "," << iocp[3] << ","
+                << logic << "," << db << "\n";
 
             _lastTick = now;
         }

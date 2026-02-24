@@ -3,16 +3,29 @@
 #include <fstream>
 #include <vector>
 #include <iomanip>
+#include <string>
 
 class AOILogger
 {
 private:
 	std::ofstream _file;
 
+	std::string FindAvailableFilename(const std::string& baseName) {
+		std::string name = baseName + ".csv";
+		if (!std::ifstream(name).good()) return name;
+
+		for (int i = 1; i <= 9999; i++) {
+			name = baseName + "_" + std::to_string(i) + ".csv";
+			if (!std::ifstream(name).good()) return name;
+		}
+		return baseName + "_overflow.csv";
+	}
+
 public:
 	AOILogger()
 	{
-		_file.open("player_aoi_list.csv", std::ios::app);
+		std::string filename = FindAvailableFilename("player_aoi_list");
+		_file.open(filename);
 		_file << "Timestamp,MyID,Pos_X,Pos_Y,Nearby_Count,Nearby_IDs\n";
 	}
 
@@ -35,7 +48,5 @@ public:
 			_file << nearbyIds[i] << (i == nearbyIds.size() - 1 ? "" : " "); 
 		}
 		_file << "\"\n";
-
-		_file.flush(); 
 	}
 };
