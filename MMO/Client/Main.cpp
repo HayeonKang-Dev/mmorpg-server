@@ -4,6 +4,8 @@
 #include <thread>
 #include <vector>
 #include <WS2tcpip.h>
+#include <cstdlib>
+#include <ctime>
 
 #include "Protocol.h"
 
@@ -21,8 +23,8 @@ int32_t myPlayerId = 0;
 std::vector<int32_t> nearbyPlayers;
 std::mutex g_listMutex; // ��� ��ȣ�� �ݰ� ����
 
-float myX = 500.0f;
-float myY = 500.0f;
+float myX = 0.0f;
+float myY = 0.0f;
 
 SOCKET g_clientSocket = INVALID_SOCKET;
 
@@ -71,24 +73,30 @@ void ReceiveThread(SOCKET sock)
                     //std::cout << "[Move] Player " << res->playerId << " -> (" << res->x << ", " << res->y << ")" << std::endl;
             }
             else if (header->id == PKT_S_ATTACK) {
-                S_ATTACK* res = (S_ATTACK*)buffer.data();
-                if (res->targetId == myPlayerId)
-                    std::cout << ">>> [ALERT] You are under attack by Player " << res->attackerId << "!" << std::endl;
-                else
-                    std::cout << "[Log] Player " << res->attackerId << " attacks Player " << res->targetId << std::endl;
+                // 공격 로그 생략 (부하 테스트용)
             }
             else if (header->id == PKT_S_DIE) {
-                S_DIE* res = (S_DIE*)buffer.data();
-                std::cout << "!!! [DEATH] Player " << res->playerId << " has been defeated!" << std::endl;
+                S_DIE* pkt = (S_DIE*)buffer.data();
+                if (pkt->playerId == myPlayerId)
+                    std::cout << "[DIE] I died!" << std::endl;
+                else
+                    std::cout << "[DIE] Player " << pkt->playerId << " died." << std::endl;
             }
             // ReceiveThread ���� ��Ŷ ó�� �κп� �߰�
             else if (header->id == PKT_S_SPAWN) {
                 S_SPAWN* pkt = (S_SPAWN*)buffer.data();
-                std::lock_guard<std::mutex> lock(g_listMutex);
-                // �ߺ� Ȯ�� �� �߰�
-                if (std::find(nearbyPlayers.begin(), nearbyPlayers.end(), pkt->playerId) == nearbyPlayers.end()) {
-                    nearbyPlayers.push_back(pkt->playerId);
-                    std::cout << "[Notice] Player " << pkt->playerId << " Spawned." << std::endl;
+                if (pkt->playerId == myPlayerId) {
+                    // 서버가 정해준 스폰 위치로 동기화
+                    myX = pkt->x;
+                    myY = pkt->y;
+                    std::cout << "[Notice] My spawn position: (" << myX << ", " << myY << ")" << std::endl;
+                }
+                else {
+                    std::lock_guard<std::mutex> lock(g_listMutex);
+                    if (std::find(nearbyPlayers.begin(), nearbyPlayers.end(), pkt->playerId) == nearbyPlayers.end()) {
+                        nearbyPlayers.push_back(pkt->playerId);
+                        // 스폰 로그 생략 (부하 테스트용)
+                    }
                 }
             }
             else if (header->id == PKT_S_DESPAWN || header->id == PKT_S_DIE) {
@@ -100,23 +108,19 @@ void ReceiveThread(SOCKET sock)
             else if (header->id == PKT_S_RESPAWN)
             {
                 S_RESPAWN* res = (S_RESPAWN*)buffer.data();
-                std::cout << ">>> [NOTICE] Player " << res->playerId << " is Respawn!" << std::endl;
                 if (res->playerId == myPlayerId)
                 {
-                    std::cout << ">>> [NOTICE] You have Respawned at (" << res->x << ", " << res->y << ")" << std::endl;
                     myX = res->x;
-                    myY = res->y; 
+                    myY = res->y;
                 }
                 else
                 {
-                    std::cout << ">>> [NOTICE] Player " << res->playerId << " has Respawned nearby you!" << std::endl;
                     std::lock_guard<std::mutex> lock(g_listMutex);
                     if (std::find(nearbyPlayers.begin(), nearbyPlayers.end(), res->playerId) == nearbyPlayers.end())
                     {
-                        nearbyPlayers.push_back(res->playerId); 
+                        nearbyPlayers.push_back(res->playerId);
                     }
                 }
-                
             }
             else if (header->id == PKT_S_CHAT)
             {
@@ -176,8 +180,16 @@ BOOL WINAPI ConsoleHandler(DWORD signal)
 
 int main(int argc, char* argv[])
 {
+    // Quick Edit Mode 비활성화 — 콘솔 클릭해도 프로세스가 멈추지 않음
+    HANDLE hInput = GetStdHandle(STD_INPUT_HANDLE);
+    DWORD mode;
+    GetConsoleMode(hInput, &mode);
+    mode &= ~ENABLE_QUICK_EDIT_MODE;
+    SetConsoleMode(hInput, mode);
 
     SetConsoleCtrlHandler(ConsoleHandler, TRUE);
+
+    srand((unsigned int)time(nullptr) + GetCurrentProcessId());
 
     WSAData wsaData;
     WSAStartup(MAKEWORD(2, 2), &wsaData);
@@ -240,6 +252,12 @@ int main(int argc, char* argv[])
 
     
 
+    // 게임에 입장하기 전까지(myPlayerId > 0) C_MOVE 전송 대기
+    while (myPlayerId == 0)
+    {
+        Sleep(100);
+    }
+
     // ���� main ������ 1�ʸ��� "������ ��"�� �մϴ�.
     while (true)
     {
@@ -250,11 +268,11 @@ int main(int argc, char* argv[])
         movePkt.header.size = sizeof(C_MOVE);
         movePkt.header.id = PKT_C_MOVE;
 
-        // 1. 이동 좌표 랜덤 생성 (그리드 크기 100 고려, ±50 범위)
-        myX += (static_cast<float>(rand() % 100 - 50));
-        myY += (static_cast<float>(rand() % 100 - 50));
+        // 이동 좌표 랜덤 생성 (±150 범위 - 그리드 간 이동 가능)
+        myX += (static_cast<float>(rand() % 300 - 150));
+        myY += (static_cast<float>(rand() % 300 - 150));
 
-        // 맵 경계 체크 (0 ~ 999)
+        // 맵 경계 체크 (0 ~ 299)
         if (myX < 0) myX = 0;
         if (myX > 999) myX = 999;
         if (myY < 0) myY = 0;
@@ -273,18 +291,16 @@ int main(int argc, char* argv[])
             // Ȯ�������� ����(0) �Ǵ� ����(1) ���� ����
             attackPkt.attackType = rand() % 2;
 
-            if (attackPkt.attackType == 0) { // ���� Ÿ�� ���� ����
-                std::lock_guard<std::mutex> lock(g_listMutex); // ��� �����ϰ� ���
+            if (attackPkt.attackType == 0) {
+                std::lock_guard<std::mutex> lock(g_listMutex);
                 if (!nearbyPlayers.empty()) {
                     int randomIdx = rand() % nearbyPlayers.size();
                     attackPkt.targetId = nearbyPlayers[randomIdx];
-                    std::cout << ">>> [Input] Sending MELEE Attack to Player " << attackPkt.targetId << std::endl;
                     send(clientSocket, (char*)&attackPkt, sizeof(C_ATTACK), 0);
                 }
             }
-            else { // ���� ����
-                attackPkt.targetId = 0; // Ÿ�� �ʿ� ����
-                std::cout << ">>> [Input] Sending RADIAL Attack!" << std::endl;
+            else {
+                attackPkt.targetId = 0;
                 send(clientSocket, (char*)&attackPkt, sizeof(C_ATTACK), 0);
             }
         }
