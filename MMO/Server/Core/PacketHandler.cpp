@@ -1,10 +1,14 @@
 #include "PacketHandler.h"
 
+#include <atomic>
 #include "LogicManager.h"
 #include "../DB/DBManager.h"
 #include "../Game/World.h"
 
-static int32_t g_IdCounter = 1; 
+static std::atomic<int32_t> g_IdCounter = 1;
+
+// World.cpp에서 정의된 뮤텍스 (grid/sessions 동시 접근 방지)
+extern std::recursive_mutex g_worldMutex;
 
 void PacketHandler::Handle_C_LOGIN(Session* session, char* buffer)
 {
@@ -17,11 +21,18 @@ void PacketHandler::Handle_C_LOGIN(Session* session, char* buffer)
 
     std::cout << "[Logic] Login Request - ID: " << userId << " / PW: " << userPw << std::endl;
 
-    // DB ������ PW�� �Բ� �ѱ�ϴ�.
-    DBManager::Get()->PushQuery([session, userId, userPw](sql::Connection* con)
+    session->UpdateLastTick(); // C_LOGIN 수신 시점으로 타임아웃 타이머 리셋 (DB 처리 시간 확보)
+
+    // DB 쿼리 중 세션이 재사용되었는지 감지하기 위해 generation 캡처
+    uint32_t expectedGen = session->GetGeneration();
+
+    DBManager::Get()->PushQuery([session, expectedGen, userId, userPw](sql::Connection* con)
         {
             try
             {
+                // 세션이 재사용되었으면 (다른 클라가 접속) 결과 무시
+                if (session->GetGeneration() != expectedGen) return;
+
                 // 1. ���� ��ȸ (password �÷� ����)
                 std::unique_ptr<sql::PreparedStatement> pstmt(con->prepareStatement(
                     "SELECT user_name, level, password FROM accounts WHERE user_id = ?"));
@@ -34,20 +45,16 @@ void PacketHandler::Handle_C_LOGIN(Session* session, char* buffer)
 
                 if (isExist)
                 {
-                    // --- ���� ���� ����: ��� üũ ---
                     std::string dbPw = res->getString("password");
 
-                    if (dbPw == userPw) // [�ٽ�] ��� ��ġ Ȯ��
+                    if (dbPw == userPw) 
                     {
-                        // ���� ID �Ҵ�
                         int32_t assignedId = g_IdCounter++;
-                        session->SetPlayerId(assignedId); 
 
                         std::string name = res->getString("user_name");
                         int level = res->getInt("level");
                         std::cout << "[DB] Password Match! User: " << name << std::endl;
 
-                        // �α��� �ð� ������Ʈ
                         std::unique_ptr<sql::PreparedStatement> updatePstmt(con->prepareStatement(
                             "UPDATE accounts SET last_login = NOW() WHERE user_id = ?"));
                         updatePstmt->setString(1, userId);
@@ -60,14 +67,12 @@ void PacketHandler::Handle_C_LOGIN(Session* session, char* buffer)
                     }
                     else
                     {
-                        // [����] ��� Ʋ��
                         std::cout << "[DB] Password Mismatch for ID: " << userId << std::endl;
                         resPkt.success = false;
                     }
                 }
                 else
                 {
-                    // --- �ű� ����: �Է��� ������� ���� ---
                     std::unique_ptr<sql::PreparedStatement> insertPstmt(con->prepareStatement(
                         "INSERT INTO accounts(user_id, password, user_name, level) VALUES (?, ?, ?, ?)"));
                     insertPstmt->setString(1, userId);
@@ -77,15 +82,14 @@ void PacketHandler::Handle_C_LOGIN(Session* session, char* buffer)
                     insertPstmt->executeUpdate();
                     con->commit();
 
-                    // ���� ID �Ҵ� 
                     int32_t assignedId = g_IdCounter++;
-                    session->SetPlayerId(assignedId);
 
 
                     std::cout << "[DB] New User Registered: " << userId << " with PW: " << userPw << std::endl;
 
                     resPkt.success = true;
                     resPkt.level = 1;
+                    resPkt.playerId = assignedId;
                     strncpy_s(resPkt.name, userId.c_str(), _TRUNCATE);
                 }
 
@@ -105,22 +109,27 @@ void PacketHandler::Handle_C_LOGIN(Session* session, char* buffer)
 
 void PacketHandler::Handle_C_MOVE(Session* session, char* buffer)
 {
-    C_MOVE* pkt = reinterpret_cast<C_MOVE*>(buffer);
+    // buffer는 페이로드만 포함 (헤더 제외): [float x][float y]
+    float x = *reinterpret_cast<float*>(buffer);
+    float y = *reinterpret_cast<float*>(buffer + sizeof(float));
+
     Player* player = session->GetPlayer();
-    
 
     if (player == nullptr)
     {
-    	
         std::cout << "[Error] C_MOVE: Player is nullptr for session " << session->GetPlayerId() << std::endl;
         return;
     }
 	if (player->m_Hp <= 0) return;
 
-    std::cout << "[Logic] C_MOVE: Player " << player->GetPlayerId() << " -> Pos: (" << pkt->x << ", " << pkt->y << ")" << std::endl;
+    // 좌표 유효성 검증: 범위 밖, NaN, Inf 모두 차단
+    if (!(x >= 0.0f && x < (float)MAP_SIZE && y >= 0.0f && y < (float)MAP_SIZE))
+    {
+        std::cout << "[Error] C_MOVE: Invalid coordinates (" << x << ", " << y << ") from Player " << player->GetPlayerId() << std::endl;
+        return;
+    }
 
-    // World::HandleMove를 호출해야 그리드 업데이트 및 브로드캐스트가 처리됨!
-    World::Get()->HandleMove(session, pkt->x, pkt->y);
+    World::Get()->HandleMove(session, x, y);
 }
 
 void PacketHandler::Handle_C_ENTER_GAME(Session* session, char* buffer)
@@ -136,6 +145,7 @@ void PacketHandler::Handle_C_ENTER_GAME(Session* session, char* buffer)
 
 	// 2. 게임 입장
 	session->SetState(PlayerState::GAME);
+	session->UpdateLastTick(); // reset timeout timer on game entry
 	World::Get()->EnterGame(session);
 }
 
@@ -143,17 +153,22 @@ void PacketHandler::Handle_S_LOGIN(Session* session, char* buffer)
 {
 	if (session == nullptr || buffer == nullptr) return;
 
-	std::cout << "[Logic] DB Search Success! Setting PlayerState" << std::endl;
-
 	S_LOGIN* pkt = reinterpret_cast<S_LOGIN*>(buffer);
 
 	// Send login response to client
 	session->Send((char*)pkt, sizeof(S_LOGIN));
 
-	// Set state to LOBBY (NOT GAME yet - wait for C_ENTER_GAME packet)
-	session->SetState(PlayerState::LOBBY);
-
-	std::cout << "[Logic] Login Success. Waiting for C_ENTER_GAME..." << std::endl;
+	if (pkt->success)
+	{
+		session->SetPlayerId(pkt->playerId); // set here: Logic thread only touches session
+		session->SetState(PlayerState::LOBBY);
+		session->UpdateLastTick(); // reset timeout timer on login
+		std::cout << "[Logic] Login Success. Player " << pkt->playerId << " -> LOBBY. Waiting for C_ENTER_GAME..." << std::endl;
+	}
+	else
+	{
+		std::cout << "[Logic] Login Failed. Incorrect password." << std::endl;
+	}
 }
 
 void PacketHandler::Handle_C_ATTACK(Session* session, char* buffer)
@@ -267,7 +282,7 @@ void PacketHandler::Handle_C_CHAT(Session* session, char* buffer)
 
     memcpy(res.chat, buffer, 128);
 
-    World::Get()->BroadcastPacketToObservers(session, (char*)&res, sizeof(S_CHAT)); 
+    World::Get()->BroadcastToAll((char*)&res, sizeof(S_CHAT)); 
 }
 
 void PacketHandler::Handle_C_LOGOUT(Session* session, char* buffer)
@@ -276,7 +291,13 @@ void PacketHandler::Handle_C_LOGOUT(Session* session, char* buffer)
 	if (player == nullptr) return;
 
 	std::cout << "[Logout] Player : " << player->GetPlayerId() << " requested logout" << std::endl;
-	World::Get()->LeaveGame(session);
-	SessionManager::Get()->Release(session); 
+
+	// 소켓만 닫으면 IOCP가 연결 종료를 감지하여 Clear(LeaveGame 포함) + RegisterAccept를 처리함
+	// Release()를 호출하면 풀에 반환된 세션이 IOCP에서도 재사용되어 이중 등록 발생
+	SOCKET sock = session->GetSocket();
+	if (sock != INVALID_SOCKET)
+	{
+		closesocket(sock);
+	}
 }
 
