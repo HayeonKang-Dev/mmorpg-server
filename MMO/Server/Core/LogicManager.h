@@ -35,7 +35,12 @@ public:
 		job->data.clear();
 
 		std::lock_guard<std::mutex> lock(m_poolMutex);
-		m_pool.push(job); 
+		if (m_pool.size() >= 1000)
+		{
+			delete job;
+			return;
+		}
+		m_pool.push(job);
 	}
 
 private:
@@ -46,13 +51,14 @@ private:
 class LogicManager
 {
 public:
+	static const int THREAD_COUNT = 4;
+
 	static LogicManager* Get()
 	{
 		static LogicManager instance;
 		return &instance;
 	}
 
-	// 모니터링용 접근자
 	ServerMonitor* GetMonitor() { return &m_monitor; }
 
 	// Route job to fixed thread by session pointer hash (affinity)
@@ -116,37 +122,52 @@ public:
 	void Shutdown()
 	{
 		m_stop = true;
-		cv.notify_all();
+		for (int i = 0; i < THREAD_COUNT; i++)
+			m_cv[i].notify_all();
 	}
 
 	void CheckSessionTimeout()
 	{
 		uint64_t now = GetTickCount64();
-		const uint64_t timeoutLimit = 15000; // 15초
+		const uint64_t lobbyGameTimeout = 30000; // LOBBY/GAME: 30s
+		const uint64_t connectTimeout   = 10000; // CONNECTED: 10s
 
 		std::vector<Session*> sessions = SessionManager::Get()->GetSessions();
 
 		for (Session* session : sessions)
 		{
-			// [수정] 실제 연결된 세션만 체크 (NONE = 대기 중인 세션)
-			if (session->GetState() == PlayerState::NONE) continue;
+			PlayerState st = session->GetState();
+			if (st == PlayerState::NONE) continue;
 
-			if (now - session->GetLastTick() > timeoutLimit)
+			uint64_t limit = (st == PlayerState::CONNECTED) ? connectTimeout : lobbyGameTimeout;
+
+			if (now - session->GetLastTick() > limit)
 			{
-				std::cout << "[Timeout] Kicking inactive Player: " << session->GetPlayerId() << std::endl;
+				std::cout << "[Timeout] Kicking Player: " << session->GetPlayerId()
+					<< " state=" << (int)st << std::endl;
 
-				SessionManager::Get()->Release(session);
+				SOCKET sock = session->GetSocket();
+				if (sock != INVALID_SOCKET)
+				{
+					session->SetState(PlayerState::NONE); 
+					closesocket(sock);
+				}
+				else
+				{
+					std::cout << "[Stuck] INVALID_SOCKET state="
+						<< (int)st << " id=" << session->GetPlayerId() << std::endl;
+				}
 			}
 		}
 	}
 
 private:
-	std::queue<Job*> jobs;
-	std::mutex m_mutex;
-	std::condition_variable cv;
+	std::queue<Job*>          m_jobs[THREAD_COUNT];
+	std::mutex                m_mutex[THREAD_COUNT];
+	std::condition_variable   m_cv[THREAD_COUNT];
 
 	bool m_stop = false;
 
-	ServerMonitor m_monitor;  // 성능 모니터링
+	ServerMonitor m_monitor;
 };
 
