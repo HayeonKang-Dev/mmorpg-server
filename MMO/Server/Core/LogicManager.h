@@ -97,26 +97,34 @@ public:
 			{
 				PacketHandler::HandlePacket(job->session, &job->header, job->data.data());
 				JobPool::Push(job);
+				m_monitor.AddLogicCount();
 			}
 
-			World::Get()->Update();
-
-			// [모니터링] 1초마다 성능 로그 기록
-			// [수정] IsConnected()는 AcceptEx 대기 세션도 true를 반환하므로,
-			// 실제 연결된 세션만 카운트하기 위해 PlayerState를 확인
-			int32_t ccu = 0;
-			for (Session* s : SessionManager::Get()->GetSessions())
+			// Only thread 0 runs periodic tasks
+			if (threadIdx == 0)
 			{
-				// NONE이 아닌 상태 = 실제 클라이언트가 연결된 세션
-				if (s->GetState() != PlayerState::NONE) ccu++;
+				World::Get()->Update();
+
+				int32_t ccu = 0;
+				for (Session* s : SessionManager::Get()->GetSessions())
+				{
+					if (s->GetState() != PlayerState::NONE) ccu++;
+				}
+
+				{
+					static uint64_t lastAoiTick = 0;
+					uint64_t now = GetTickCount64();
+					if (now - lastAoiTick >= 1000)
+					{
+						lastAoiTick = now;
+						World::Get()->LogAllPlayersAOI();
+						CheckSessionTimeout();
+					}
+				}
+
+				m_monitor.Update(ccu);
 			}
-
-			// [AOI 로깅] 1초마다 플레이어별 시야 정보 기록
-			World::Get()->LogAllPlayersAOI();
-
-			m_monitor.Update(ccu);
 		}
-		
 	}
 
 	void Shutdown()
