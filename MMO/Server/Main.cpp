@@ -1,4 +1,4 @@
-#include <iostream>
+﻿#include <iostream>
 
 #include "IocpCore.h"
 #include "Listener.h"
@@ -9,55 +9,66 @@
 #include "LogicManager.h"
 #include "DB/DBManager.h"
 
+
+
 int main()
 {
 	WSADATA wsaData;
 	if (::WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) return 0;
 
+	// Quick Edit Mode 비활성화 — 콘솔 클릭해도 서버가 멈추지 않음
+	HANDLE hInput = GetStdHandle(STD_INPUT_HANDLE);
+	DWORD mode;
+	GetConsoleMode(hInput, &mode);
+	mode &= ~ENABLE_QUICK_EDIT_MODE;
+	SetConsoleMode(hInput, mode);
 
-	// 1. ���� �Ŵ��� �ʱ�ȭ (100�� Ǯ��)
-	SessionManager::Get()->Init(100);
+	SetConsoleOutputCP(949);
 
-	// SendBuffer Ǯ �ʱ�ȭ 
-	SendBufferManager::Get()->Init(200);
+	// 1. 세션 매니저 초기화 (최대 CCU  + AcceptEx 여유분 10)
+	SessionManager::Get()->Init(1530); 
 
-	// 2. DB �Ŵ��� �ʱ�ȭ
+	// SendBuffer 풀 초기화
+	SendBufferManager::Get()->Init(5000); 
+
+	// 2. DB 매니저 초기화
 	if (DBManager::Get()->Init(2, "tcp://127.0.0.1:3306", "root", "sotptkd", "mmo_db"))
 	{
-		std::cout << "DB ������ Ǯ ���� ����" << std::endl;
+		std::cout << "DB 커넥션 풀 생성 성공" << std::endl;
 	}
 
-	// 3. IOCP �ھ� �� ������ ����
+	// 3. IOCP 코어 및 리스너 생성
 	IocpCore iocp;
 	Listener listener;
 	iocp.SetListener(&listener);
 
 	if (listener.StartListen(8001, &iocp) == false)
 	{
-		std::cout << "Listen ����!" << std::endl;
+		std::cout << "Listen 실패!" << std::endl;
 		return 0;
 	}
 
-	// 4. �̸� AcceptEx 10�� �ɾ�α�
-	for (int i=0; i<10; i++)
+	// 4. 미리 AcceptEx 20개 걸어놓기(10에서 20으로 증가시킴)
+	for (int i=0; i<20; i++)
 	{
 		Session* session = SessionManager::Get()->Acquire();
 
-		// iocp�� ���� �Ѱܼ� Listener ���ο��� ���� ����-���-AcceptEx �ѹ��� �Ͼ�� �� 
+		// iocp에 함께 넘겨서 Listener 내부에서 소켓 생성-등록-AcceptEx 한번에 일어나게 함 
 		listener.RegisterAccept(session, &iocp); 
 	}
 
-	// 5. ��Ŀ ������ 4�� ����
+	// 5. 워커 스레드 4개 생성
 	std::vector<std::thread> workers;
 	for (int i=0; i<4; i++)
 	{
-		workers.push_back(std::thread([&iocp]()
+		workers.push_back(std::thread([&iocp, i]()
 		{
 			while (1)
 			{
 				iocp.Dispatch();
+				LogicManager::Get()->GetMonitor()->AddWorkerCount(i);
 			}
-		})); 
+		}));
 	}
 
 	// 6. Logic Thread x4 (session affinity-based)
