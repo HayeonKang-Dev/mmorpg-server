@@ -1,10 +1,14 @@
-﻿#include "World.h"
+#include "World.h"
 
 #include <cppconn/driver.h>
+#include <cstdlib>
 
 #include "Session.h"
 #include "PacketHandler.h"
 #include "Protocol.h"
+
+// Worker 스레드(LeaveGame)와 Logic 스레드(HandleMove 등)의 동시 grid/sessions 접근 방지
+std::recursive_mutex g_worldMutex;
 
 // Helper: 시야 범위 내 모든 그리드에 세션 등록
 void World::InsertToVisionGrids(Session* session, GridPos centerPos, int visionRange)
@@ -45,7 +49,6 @@ void World::UpdateVisionGrids(Session* session, GridPos oldPos, GridPos newPos, 
 			GridPos oldGrid = { oldPos.x + dx, oldPos.y + dy };
 			if (IsInvalid(oldGrid)) continue;
 
-			// 새 시야 범위 밖이면 제거
 			if (abs(oldGrid.x - newPos.x) > visionRange || abs(oldGrid.y - newPos.y) > visionRange)
 			{
 				grids[oldGrid.y][oldGrid.x].erase(session);
@@ -61,7 +64,6 @@ void World::UpdateVisionGrids(Session* session, GridPos oldPos, GridPos newPos, 
 			GridPos newGrid = { newPos.x + dx, newPos.y + dy };
 			if (IsInvalid(newGrid)) continue;
 
-			// 이전 시야 범위 밖이면 추가
 			if (abs(newGrid.x - oldPos.x) > visionRange || abs(newGrid.y - oldPos.y) > visionRange)
 			{
 				grids[newGrid.y][newGrid.x].insert(session);
@@ -72,154 +74,275 @@ void World::UpdateVisionGrids(Session* session, GridPos oldPos, GridPos newPos, 
 
 void World::EnterGame(Session* session)
 {
-	// 0. Player 객체 생성 (아직 없다면)
-	if (session->GetPlayer() == nullptr)
+	float startX, startY;
+	GridPos centerPos;
+	std::vector<Session*> spawnTargets; // 상호 SPAWN 대상
+
 	{
-		Player* newPlayer = new Player(session);
-		session->SetPlayer(newPlayer);
-		std::cout << "[World] Player object created for ID " << session->GetPlayerId() << std::endl;
+		std::lock_guard<std::recursive_mutex> lock(g_worldMutex);
+
+		if (session->GetPlayer() == nullptr)
+		{
+			Player* newPlayer = new Player(session);
+			session->SetPlayer(newPlayer);
+		}
+
+		startX = (float)(rand() % MAP_SIZE);
+		startY = (float)(rand() % MAP_SIZE);
+		session->SetPos(startX, startY);
+
+		centerPos = GetGridPos(startX, startY);
+
+		// 내 시야 9칸 모두에 나를 등록
+		InsertToVisionGrids(session, centerPos, VISION_RANGE);
+
+		// 상호 SPAWN 대상 수집 (내 실제 위치 그리드)
+		for (Session* other : grids[centerPos.y][centerPos.x])
+		{
+			if (other != session)
+				spawnTargets.push_back(other);
+		}
+
+		sessions[session->GetPlayerId()] = session;
 	}
 
-	float startX = 500.0f;
-	float startY = 500.0f;
-	session->SetPos(startX, startY);
-
-	GridPos centerPos = GetGridPos(startX, startY);
-	int visionRange = 1;
-
-	// 1. 내 시야 9칸 모두에 나를 등록
-	InsertToVisionGrids(session, centerPos, visionRange);
-
-	// 2. 내 실제 위치 그리드의 플레이어들과 상호 SPAWN
-	for (Session* other : grids[centerPos.y][centerPos.x])
+	// mutex 바깥에서 전송
+	// 본인에게 스폰 위치 전송
 	{
-		if (other == session) continue;
-		SendSpawn(other, session);
-		SendSpawn(session, other);
+		S_SPAWN selfSpawn;
+		selfSpawn.header = { sizeof(S_SPAWN), PKT_S_SPAWN };
+		selfSpawn.playerId = session->GetPlayerId();
+		selfSpawn.x = startX;
+		selfSpawn.y = startY;
+		session->Send((char*)&selfSpawn, sizeof(selfSpawn));
 	}
 
-	sessions[session->GetPlayerId()] = session;
+	// 상호 SPAWN 전송
+	S_SPAWN spawnPkt;
+	spawnPkt.header = { sizeof(S_SPAWN), PKT_S_SPAWN };
+	for (Session* other : spawnTargets)
+	{
+		// other에게 나를 알림
+		spawnPkt.playerId = session->GetPlayerId();
+		spawnPkt.x = startX;
+		spawnPkt.y = startY;
+		other->Send((char*)&spawnPkt, sizeof(spawnPkt));
 
-	std::cout << "[World] Player " << session->GetPlayerId() << " -> Entered at (" << startX << ", " << startY << ")" << std::endl;
+		// 나에게 other를 알림
+		spawnPkt.playerId = other->GetPlayerId();
+		spawnPkt.x = other->GetX();
+		spawnPkt.y = other->GetY();
+		session->Send((char*)&spawnPkt, sizeof(spawnPkt));
+	}
 }
 
 void World::LeaveGame(Session* session)
 {
-	if (session == nullptr || session->GetPlayer() == nullptr) return;
-
-	int32_t leavePlayerId = session->GetPlayerId();
-	GridPos pos = GetGridPos(session->GetX(), session->GetY());
+	std::vector<Session*> despawnTargets;
+	int32_t leavePlayerId;
 
 	{
-		std::lock_guard<std::mutex> lock(_gridMutex[pos.y][pos.x]);
+		std::lock_guard<std::recursive_mutex> lock(g_worldMutex);
+		if (session == nullptr || session->GetPlayer() == nullptr) return;
+
+		leavePlayerId = session->GetPlayerId();
+		GridPos pos = GetGridPos(session->GetX(), session->GetY());
+
+		// DESPAWN 대상 수집
 		for (Session* observer : grids[pos.y][pos.x])
 		{
-			if (observer == session) continue;
-			SendDespawn(observer, session); 
+			if (observer != session)
+				despawnTargets.push_back(observer);
 		}
+
+		RemoveFromVisionGrids(session, pos, VISION_RANGE);
+		sessions.erase(leavePlayerId);
 	}
 
-	RemoveFromVisionGrids(session, pos, VISION_RANGE);
-	{
-		std::lock_guard<std::mutex> lock(m_mutex);
-		sessions.erase(leavePlayerId); 
-	}
-	std::cout << "[World] Player " << leavePlayerId << " Leave Success." << std::endl;
+	// mutex 바깥에서 DESPAWN 전송
+	S_DESPAWN pkt;
+	pkt.header = { sizeof(S_DESPAWN), PKT_S_DESPAWN };
+	pkt.playerId = leavePlayerId;
+	for (Session* observer : despawnTargets)
+		observer->Send((char*)&pkt, sizeof(pkt));
 }
 
 void World::HandleMove(Session* session, float x, float y)
 {
-	GridPos oldPos = GetGridPos(session->GetX(), session->GetY());
-	GridPos newPos = GetGridPos(x, y);
+	// mutex 보유 구간: 좌표/그리드 업데이트 + 전송 대상 수집만
+	bool gridChanged = false;
+	GridPos oldPos, newPos;
 
-	session->SetPos(x, y);
+	// 전송 태스크
+	std::vector<Session*> moveTargets;
+	std::vector<std::pair<Session*, Session*>> despawnPairs; // (target, obj)
+	std::vector<std::pair<Session*, Session*>> spawnPairs;
 
-	int visionRange = 1;
-
-	if (!(oldPos == newPos))
 	{
-		// 겹치지 않는 부분만 제거/추가 (최적화!)
-		UpdateVisionGrids(session, oldPos, newPos, visionRange);
-		UpdateVision(session, oldPos, newPos);
+		std::lock_guard<std::recursive_mutex> lock(g_worldMutex);
+
+		// 좌표 클램핑
+		if (x < 0.0f) x = 0.0f;
+		if (x >= (float)MAP_SIZE) x = (float)MAP_SIZE - 1.0f;
+		if (y < 0.0f) y = 0.0f;
+		if (y >= (float)MAP_SIZE) y = (float)MAP_SIZE - 1.0f;
+
+		oldPos = GetGridPos(session->GetX(), session->GetY());
+		newPos = GetGridPos(x, y);
+
+		session->SetPos(x, y);
+
+		if (!(oldPos == newPos))
+		{
+			gridChanged = true;
+			UpdateVisionGrids(session, oldPos, newPos, VISION_RANGE);
+
+			// DESPAWN 대상 수집: 새 시야 밖으로 나간 셀
+			for (int dy = -VISION_RANGE; dy <= VISION_RANGE; dy++)
+			{
+				for (int dx = -VISION_RANGE; dx <= VISION_RANGE; dx++)
+				{
+					GridPos oldGrid = { oldPos.x + dx, oldPos.y + dy };
+					if (IsInvalid(oldGrid)) continue;
+					if (abs(oldGrid.x - newPos.x) > VISION_RANGE || abs(oldGrid.y - newPos.y) > VISION_RANGE)
+					{
+						for (Session* other : grids[oldGrid.y][oldGrid.x])
+						{
+							if (other != session)
+							{
+								despawnPairs.push_back({ other, session });
+								despawnPairs.push_back({ session, other });
+							}
+						}
+					}
+				}
+			}
+
+			// SPAWN 대상 수집: 새로 시야에 들어온 셀
+			for (int dy = -VISION_RANGE; dy <= VISION_RANGE; dy++)
+			{
+				for (int dx = -VISION_RANGE; dx <= VISION_RANGE; dx++)
+				{
+					GridPos newGrid = { newPos.x + dx, newPos.y + dy };
+					if (IsInvalid(newGrid)) continue;
+					if (abs(newGrid.x - oldPos.x) > VISION_RANGE || abs(newGrid.y - oldPos.y) > VISION_RANGE)
+					{
+						for (Session* other : grids[newGrid.y][newGrid.x])
+						{
+							if (other != session)
+							{
+								spawnPairs.push_back({ other, session });
+								spawnPairs.push_back({ session, other });
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// MOVE 브로드캐스트 대상 수집 (현재 위치 그리드)
+		GridPos curPos = GetGridPos(session->GetX(), session->GetY());
+		for (Session* obs : grids[curPos.y][curPos.x])
+		{
+			if (obs != nullptr)
+				moveTargets.push_back(obs);
+		}
 	}
-	else
+
+	// mutex 바깥에서 전송
+
+	// DESPAWN
 	{
-		// 같은 그리드 내 이동 → 내 실제 위치 그리드만 Broadcast
-		BroadcastMove(session);
+		S_DESPAWN pkt;
+		pkt.header = { sizeof(S_DESPAWN), PKT_S_DESPAWN };
+		for (auto& [target, obj] : despawnPairs)
+		{
+			pkt.playerId = obj->GetPlayerId();
+			target->Send((char*)&pkt, sizeof(pkt));
+		}
+	}
+
+	// SPAWN
+	{
+		S_SPAWN pkt;
+		pkt.header = { sizeof(S_SPAWN), PKT_S_SPAWN };
+		for (auto& [target, obj] : spawnPairs)
+		{
+			pkt.playerId = obj->GetPlayerId();
+			pkt.x = obj->GetX();
+			pkt.y = obj->GetY();
+			target->Send((char*)&pkt, sizeof(pkt));
+		}
+	}
+
+	// MOVE
+	{
+		S_MOVE pkt;
+		pkt.header = { sizeof(S_MOVE), PKT_S_MOVE };
+		pkt.playerId = session->GetPlayerId();
+		pkt.x = x;
+		pkt.y = y;
+		for (Session* obs : moveTargets)
+			obs->Send((char*)&pkt, sizeof(pkt));
 	}
 }
 
+// UpdateVision은 HandleMove 내부로 통합됐으므로 빈 구현 유지 (헤더 호환)
 void World::UpdateVision(Session* session, GridPos oldPos, GridPos newPos)
 {
-	// 1. 새로 보이게 된 플레이어 처리 (SPAWN/MOVE)
-	for (Session* other : grids[newPos.y][newPos.x])
-	{
-		if (other == session) continue;
-
-		// 이전 위치에서 1칸 이상 벗어났다면 → 새로 보임
-		if (abs(newPos.x - oldPos.x) > 1 || abs(newPos.y - oldPos.y) > 1)
-		{
-			SendSpawn(other, session);
-			SendSpawn(session, other);
-		}
-		else
-		{
-			// 계속 보이던 애는 MOVE만
-			SendMove(other, session);
-		}
-	}
-
-	// 2. 시야에서 벗어난 플레이어 처리 (DESPAWN) 
-	for (Session* other : grids[oldPos.y][oldPos.x])
-	{
-		if (other == session) continue;
-
-		// 새 위치에서 2칸 이상 멀어졌다면 → DESPAWN
-		if (abs(oldPos.x - newPos.x) > 2 || abs(oldPos.y - newPos.y) > 2)
-		{
-			SendDespawn(other, session);
-			SendDespawn(session, other);
-		}
-	}
+	// 현재 HandleMove에서 인라인 처리됨
 }
 
 void World::BroadcastMove(Session* session)
 {
-	GridPos pos = GetGridPos(session->GetX(), session->GetY());
-
+	// 현재 HandleMove에서 인라인 처리됨 (호환성 유지)
+	std::vector<Session*> targets;
+	{
+		std::lock_guard<std::recursive_mutex> lock(g_worldMutex);
+		GridPos pos = GetGridPos(session->GetX(), session->GetY());
+		for (Session* obs : grids[pos.y][pos.x])
+			if (obs) targets.push_back(obs);
+	}
 	S_MOVE pkt;
-	pkt.header.id = PKT_S_MOVE;
-	pkt.header.size = sizeof(S_MOVE);
+	pkt.header = { sizeof(S_MOVE), PKT_S_MOVE };
 	pkt.playerId = session->GetPlayerId();
 	pkt.x = session->GetX();
 	pkt.y = session->GetY();
-
-	BroadcastPacketToObservers(session, (char*)&pkt, pkt.header.size); 
+	for (Session* obs : targets)
+		obs->Send((char*)&pkt, sizeof(pkt));
 }
 
 void World::BroadcastDie(Session* session)
 {
-	GridPos pos = GetGridPos(session->GetX(), session->GetY());
-
+	std::vector<Session*> targets;
+	{
+		std::lock_guard<std::recursive_mutex> lock(g_worldMutex);
+		GridPos pos = GetGridPos(session->GetX(), session->GetY());
+		for (Session* obs : grids[pos.y][pos.x])
+			if (obs) targets.push_back(obs);
+	}
 	S_DIE pkt;
 	pkt.header = { sizeof(S_DIE), PKT_S_DIE };
 	pkt.playerId = session->GetPlayerId();
-
-	BroadcastPacketToObservers(session, (char*)&pkt, pkt.header.size);
-
-	std::cout << "[World] Player " << session->GetPlayerId() << " Died. Broadcast sent to observers in grid [" << pos.x << ", " << pos.y << "]" << std::endl;
-
+	for (Session* obs : targets)
+		obs->Send((char*)&pkt, sizeof(pkt));
 }
 
 void World::BroadcastPacketToObservers(Session* session, char* ptr, int len)
 {
-	GridPos pos = GetGridPos(session->GetX(), session->GetY());
-
-	for (Session* observer : grids[pos.y][pos.x])
+	// mutex 보유 시간 최소화: 타겟 목록만 snapshot, Send는 mutex 바깥에서
+	std::vector<Session*> targets;
 	{
-		if (observer == nullptr) continue;
-		observer->Send(ptr, len); 
+		std::lock_guard<std::recursive_mutex> lock(g_worldMutex);
+		GridPos pos = GetGridPos(session->GetX(), session->GetY());
+		targets.reserve(grids[pos.y][pos.x].size());
+		for (Session* observer : grids[pos.y][pos.x])
+		{
+			if (observer != nullptr) targets.push_back(observer);
+		}
 	}
+	for (Session* observer : targets)
+		observer->Send(ptr, len);
 }
 
 void World::SendSpawn(Session* target, Session* obj)
@@ -244,6 +367,19 @@ void World::SendDespawn(Session* target, Session* obj)
 	target->Send((char*)&pkt, pkt.header.size);
 }
 
+void World::BroadcastToAll(char* ptr, int len)
+{
+	std::vector<Session*> targets;
+	{
+		std::lock_guard<std::recursive_mutex> lock(g_worldMutex);
+		targets.reserve(sessions.size());
+		for (auto& [id, session] : sessions)
+			if (session != nullptr) targets.push_back(session);
+	}
+	for (Session* s : targets)
+		s->Send(ptr, len);
+}
+
 float World::CalculateDistance(Session* s1, Session* s2)
 {
 	if (s1 == nullptr || s2 == nullptr) return 99999.0f;
@@ -254,6 +390,7 @@ float World::CalculateDistance(Session* s1, Session* s2)
 
 Session* World::FindSession(int32_t playerId)
 {
+	std::lock_guard<std::recursive_mutex> lock(g_worldMutex);
 	auto it = sessions.find(playerId);
 	if (it == sessions.end()) return nullptr;
 
@@ -262,6 +399,7 @@ Session* World::FindSession(int32_t playerId)
 
 void World::LogAllPlayersAOI()
 {
+	std::lock_guard<std::recursive_mutex> lock(g_worldMutex);
 	for (auto& [id, session] : sessions)
 	{
 		GridPos pos = GetGridPos(session->GetX(), session->GetY());
@@ -276,4 +414,3 @@ void World::LogAllPlayersAOI()
 		_aoiLogger.LogPlayerAOI(id, session->GetX(), session->GetY(), nearbyIds);
 	}
 }
-
