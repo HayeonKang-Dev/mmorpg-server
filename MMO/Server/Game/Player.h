@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <iostream>
+#include <mutex>
 
 #include "Session.h"
 
@@ -30,8 +31,10 @@ class Player
 public:
 	Player(Session* session) : m_session(session) {}
 
+	std::mutex m_mutex;  // HP/상태 보호용 개별 락 (g_worldMutex와 독립)
+
 	int32_t m_Hp = 100;
-	int32_t m_maxHp = 100; 
+	int32_t m_maxHp = 100;
 
 	Session* m_session = nullptr;
 
@@ -45,11 +48,13 @@ public:
 
 	void OnDamaged(int32_t damage, Player* attacker)
 	{
+		if (m_Hp <= 0) return;  // 이미 죽은 상태면 무시
+
 		m_Hp -= damage;
 		if (m_Hp <= 0)
 		{
 			m_Hp = 0;
-			Die(); 
+			Die();
 		}
 	}
 

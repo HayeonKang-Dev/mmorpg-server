@@ -1,4 +1,4 @@
-#include <WinSock2.h>
+﻿#include <WinSock2.h>
 #include <iostream>
 #include <mutex>
 #include <thread>
@@ -12,16 +12,11 @@
 
 #pragma comment(lib, "ws2_32.lib")
 
-// ������ ������ ���
-/*struct PacketHeader
-{
-	uint16_t size;	// ��Ŷ ��ü ũ�� (��� 4 + ������ 2 = 6)
-	uint16_t id;	// ��Ŷ ���� (1) 
-};*/
+static constexpr int MOVE_RANGE = 30;  // 틱당 최대 이동거리 (±MOVE_RANGE)
 
 int32_t myPlayerId = 0;
 std::vector<int32_t> nearbyPlayers;
-std::mutex g_listMutex; // ��� ��ȣ�� �ݰ� ����
+std::mutex g_listMutex; // nearbyPlayers 보호용 뮤텍스
 
 float myX = 0.0f;
 float myY = 0.0f;
@@ -36,7 +31,7 @@ void ReceiveThread(SOCKET sock)
 
     while (true)
     {
-        // 1. �����κ��� ������ ���� (���⼭�� recv�� �մϴ�!)
+        // 1. 서버로부터 데이터 수신
         int len = recv(sock, temp, 1024, 0);
         if (len <= 0) {
             std::cout << "Disconnected from Server (ReceiveThread)." << std::endl;
@@ -45,20 +40,20 @@ void ReceiveThread(SOCKET sock)
 
         buffer.insert(buffer.end(), temp, temp + len);
 
-        // 2. ��Ŷ �ؼ� ����
+        // 2. 수신 버퍼에서 패킷 파싱
         while (buffer.size() >= sizeof(PacketHeader))
         {
             PacketHeader* header = (PacketHeader*)buffer.data();
             if (buffer.size() < header->size) break;
 
-            // --- [��Ŷ ������ ó�� �� �α� ���] ---
+            // 패킷 종류별 처리
             if (header->id == PKT_S_LOGIN) {
                 S_LOGIN* res = (S_LOGIN*)buffer.data();
                 if (res->success) {
                     myPlayerId = res->playerId;
                     std::cout << "Login Success! ID: " << myPlayerId << std::endl;
 
-                    // Send C_ENTER_GAME packet
+                    // 로그인 성공 시 게임 입장 요청
                     PacketHeader enterGamePkt;
                     enterGamePkt.size = sizeof(PacketHeader);
                     enterGamePkt.id = PKT_C_ENTER_GAME;
@@ -67,10 +62,9 @@ void ReceiveThread(SOCKET sock)
                 }
             }
             else if (header->id == PKT_S_MOVE) {
-                S_MOVE* res = (S_MOVE*)buffer.data();
-                // �� �̵� �α״� ���� ������ ���� ������ �͸� ���
-                //if (res->playerId != myPlayerId)
-                    //std::cout << "[Move] Player " << res->playerId << " -> (" << res->x << ", " << res->y << ")" << std::endl;
+                // 이동 로그는 부하 테스트 시 출력 생략
+                //S_MOVE* res = (S_MOVE*)buffer.data();
+                //std::cout << "[Move] Player " << res->playerId << " -> (" << res->x << ", " << res->y << ")" << std::endl;
             }
             else if (header->id == PKT_S_ATTACK) {
                 // 공격 로그 생략 (부하 테스트용)
@@ -82,7 +76,6 @@ void ReceiveThread(SOCKET sock)
                 else
                     std::cout << "[DIE] Player " << pkt->playerId << " died." << std::endl;
             }
-            // ReceiveThread ���� ��Ŷ ó�� �κп� �߰�
             else if (header->id == PKT_S_SPAWN) {
                 S_SPAWN* pkt = (S_SPAWN*)buffer.data();
                 if (pkt->playerId == myPlayerId) {
@@ -99,12 +92,11 @@ void ReceiveThread(SOCKET sock)
                     }
                 }
             }
-            else if (header->id == PKT_S_DESPAWN || header->id == PKT_S_DIE) {
-                // S_DIE�� S_DESPAWN���� �ش� ID ���� ���� (������ �����ϵ� mutex�� �߰�)
+            else if (header->id == PKT_S_DESPAWN) {
+                // 시야에서 벗어난 플레이어 목록 제거
                 std::lock_guard<std::mutex> lock(g_listMutex);
-                // nearbyPlayers.erase(...) 
+                // nearbyPlayers.erase(...)
             }
-            // ... SPAWN/DESPAWN �� ������ ��Ŷ�� �����ϰ� ó�� ...
             else if (header->id == PKT_S_RESPAWN)
             {
                 S_RESPAWN* res = (S_RESPAWN*)buffer.data();
@@ -135,7 +127,7 @@ void ReceiveThread(SOCKET sock)
 }
 
 
-// 입력 스레드
+// 채팅 입력 스레드
 void InputThread(SOCKET sock)
 {
 	while (true)
@@ -150,7 +142,7 @@ void InputThread(SOCKET sock)
             chatPkt.header.size = sizeof(C_CHAT);
             strncpy_s(chatPkt.chat, msg, _TRUNCATE);
 
-            send(sock, (char*)&chatPkt, sizeof(C_CHAT), 0); 
+            send(sock, (char*)&chatPkt, sizeof(C_CHAT), 0);
         }
 	}
 }
@@ -174,7 +166,7 @@ BOOL WINAPI ConsoleHandler(DWORD signal)
         WSACleanup();
         exit(0);
 	}
-    return TRUE; 
+    return TRUE;
 }
 
 
@@ -210,20 +202,20 @@ int main(int argc, char* argv[])
 
     std::cout << "Connected to Server!" << std::endl;
 
-    // --- Login ---
+    // 로그인 정보 입력
     char inputId[32], inputPw[32];
 
     if (argc >= 2)
     {
-        // Auto login mode: Client.exe <number>
-        // Example: Client.exe 1 -> ID: Test_1, PW: test123
+        // 자동 로그인 모드: Client.exe <번호>
+        // 예시: Client.exe 1 -> ID: Test_1, PW: test123
         snprintf(inputId, 32, "Test_%s", argv[1]);
         strncpy_s(inputPw, "test123", _TRUNCATE);
         std::cout << "[Auto Login] ID: " << inputId << std::endl;
     }
     else
     {
-        // Manual login mode
+        // 수동 로그인 모드
         std::cout << "Enter User ID: ";
         std::cin >> inputId;
         std::cout << "Enter Password: ";
@@ -242,15 +234,12 @@ int main(int argc, char* argv[])
     send(clientSocket, (char*)&loginPkt, sizeof(C_LOGIN), 0);
     std::cout << "Login Request Sent..." << std::endl;
 
-
-    // --- [�߿�] �α��� ��Ŷ ���� ���� ���� ������ ���� ---
+    // [중요] 수신 스레드를 먼저 시작해야 로그인 응답을 받을 수 있음
     std::thread t(ReceiveThread, clientSocket);
-    t.detach(); // ��׶��忡�� ���������� ����
+    t.detach(); // 백그라운드에서 독립적으로 실행
 
     std::thread t2(InputThread, clientSocket);
-    t2.detach(); 
-
-    
+    t2.detach();
 
     // 게임에 입장하기 전까지(myPlayerId > 0) C_MOVE 전송 대기
     while (myPlayerId == 0)
@@ -258,21 +247,21 @@ int main(int argc, char* argv[])
         Sleep(100);
     }
 
-    // ���� main ������ 1�ʸ��� "������ ��"�� �մϴ�.
+    // 이후 main 스레드는 주기적으로 이동/공격 패킷을 전송
     while (true)
     {
-        // 1. �̵� ��Ŷ �۽�
+        // 1. 이동 패킷 전송
         C_MOVE movePkt;
         memset(&movePkt, 0, sizeof(C_MOVE));
 
         movePkt.header.size = sizeof(C_MOVE);
         movePkt.header.id = PKT_C_MOVE;
 
-        // 이동 좌표 랜덤 생성 (±150 범위 - 그리드 간 이동 가능)
-        myX += (static_cast<float>(rand() % 300 - 150));
-        myY += (static_cast<float>(rand() % 300 - 150));
+        // 이동 좌표 랜덤 생성 (±MOVE_RANGE 범위 - 그리드 내 이동 위주)
+        myX += (static_cast<float>(rand() % (MOVE_RANGE * 2) - MOVE_RANGE));
+        myY += (static_cast<float>(rand() % (MOVE_RANGE * 2) - MOVE_RANGE));
 
-        // 맵 경계 체크 (0 ~ 299)
+        // 맵 경계 체크 (0 ~ 999)
         if (myX < 0) myX = 0;
         if (myX > 999) myX = 999;
         if (myY < 0) myY = 0;
@@ -283,12 +272,12 @@ int main(int argc, char* argv[])
 
         send(clientSocket, (char*)&movePkt, sizeof(C_MOVE), 0);
 
-        // 2. ���� ���� (20% Ȯ��)
+        // 2. 공격 패킷 (20% 확률)
         if (rand() % 5 == 0) {
             C_ATTACK attackPkt;
             attackPkt.header = { sizeof(C_ATTACK), PKT_C_ATTACK };
 
-            // Ȯ�������� ����(0) �Ǵ� ����(1) ���� ����
+            // 확률적으로 근접(0) 또는 범위(1) 공격 선택
             attackPkt.attackType = rand() % 2;
 
             if (attackPkt.attackType == 0) {
@@ -305,7 +294,7 @@ int main(int argc, char* argv[])
             }
         }
 
-        // �ֱ⸦ �ణ Ʋ� �������� ���� (0.8�� ~ 1.2�� ����)
+        // 주기를 약간 틀어 자연스럽게 이동 (0.8초 ~ 1.2초 간격)
         Sleep(800 + rand() % 400);
     }
 

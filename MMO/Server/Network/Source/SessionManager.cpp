@@ -37,11 +37,11 @@ Session* SessionManager::Acquire()
 
 void SessionManager::Release(Session* session)
 {
-	std::lock_guard<std::mutex> lock(m_mutex);
-
 	// 세션 상태 초기화 (소켓 닫기, 버퍼 비우기 등)
 	session->Clear(); // Session 클래스에 초기화 함수 만드는 것이 좋음
 
+
+	std::lock_guard<std::mutex> lock(m_mutex);
 	m_freeSessions.push(session); 
 }
 
