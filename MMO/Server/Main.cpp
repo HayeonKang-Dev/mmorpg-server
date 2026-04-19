@@ -25,11 +25,11 @@ int main()
 
 	SetConsoleOutputCP(949);
 
-	// 1. 세션 매니저 초기화 (최대 CCU  + AcceptEx 여유분 10)
-	SessionManager::Get()->Init(1530); 
+	// 1. 세션 매니저 초기화 (최대 CCU 2300 + AcceptEx 여유분 20)
+	SessionManager::Get()->Init(2320);
 
 	// SendBuffer 풀 초기화
-	SendBufferManager::Get()->Init(5000); 
+	SendBufferManager::Get()->Init(8000);
 
 	// 2. DB 매니저 초기화
 	if (DBManager::Get()->Init(2, "tcp://127.0.0.1:3306", "root", "sotptkd", "mmo_db"))
